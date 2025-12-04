@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  pulse:
+    build: .
+    container_name: runagent-pulse
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./pulse-data:/app/data
+    environment:
+      - PULSE_API_KEY=${PULSE_API_KEY:-}
+      - PULSE_TIMEZONE=UTC
+      - PULSE_LOG_LEVEL=INFO
+      - PULSE_DB_PATH=/app/data/pulse.db
+    restart: unless-stopped
+

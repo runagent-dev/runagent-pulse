@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RunAgent Pulse Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
+    <style>
+        .fc-event { cursor: pointer; }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen flex flex-col">
+    <nav class="bg-white shadow-sm p-4">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold text-gray-800">RunAgent Pulse</h1>
+            <div class="flex gap-4 items-center">
+                <label class="flex items-center space-x-2">
+                    <input type="checkbox" id="filter-active" checked class="form-checkbox text-blue-600">
+                    <span class="text-sm text-gray-600">Pending</span>
+                </label>
+                <label class="flex items-center space-x-2">
+                    <input type="checkbox" id="filter-processing" checked class="form-checkbox text-yellow-600">
+                    <span class="text-sm text-gray-600">Claimed</span>
+                </label>
+                <label class="flex items-center space-x-2">
+                    <input type="checkbox" id="filter-completed" class="form-checkbox text-green-600">
+                    <span class="text-sm text-gray-600">Completed</span>
+                </label>
+            </div>
+        </div>
+    </nav>
+
+    <div class="flex-1 container mx-auto p-4 overflow-hidden">
+        <div class="bg-white rounded-lg shadow h-full p-4">
+            <div id='calendar' class="h-full"></div>
+        </div>
+    </div>
+
+    <!-- Task Details Modal -->
+    <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg p-6 max-w-lg w-full">
+            <h2 id="modal-title" class="text-xl font-bold mb-4">Task Details</h2>
+            <pre id="modal-content" class="bg-gray-100 p-4 rounded overflow-auto max-h-96 text-sm"></pre>
+            <div class="mt-4 flex justify-end">
+                <button onclick="closeModal()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let calendar;
+        let pollInterval;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const calendarEl = document.getElementById('calendar');
+            
+            calendar = new FullCalendar.Calendar(calendarEl, {
+                initialView: 'timeGridWeek',
+                headerToolbar: {
+                    left: 'prev,next today',
+                    center: 'title',
+                    right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                },
+                height: '100%',
+                slotDuration: '00:15:00',
+                nowIndicator: true,
+                events: fetchEvents,
+                eventClick: function(info) {
+                    showTaskDetails(info.event.extendedProps);
+                }
+            });
+            
+            calendar.render();
+
+            // Setup filters
+            document.querySelectorAll('input[type="checkbox"]').forEach(el => {
+                el.addEventListener('change', () => calendar.refetchEvents());
+            });
+
+            // Hot reload (poll every 5s)
+            pollInterval = setInterval(() => {
+                calendar.refetchEvents();
+            }, 5000);
+        });
+
+        async function fetchEvents(info, successCallback, failureCallback) {
+            try {
+                const start = Math.floor(info.start.valueOf() / 1000);
+                const end = Math.floor(info.end.valueOf() / 1000);
+                
+                // Build query
+                const params = new URLSearchParams({
+                    start_time: start,
+                    end_time: end,
+                    limit: 1000
+                });
+
+                const response = await fetch(`/tasks?${params}`);
+                const data = await response.json();
+                
+                const filters = {
+                    active: document.getElementById('filter-active').checked,
+                    processing: document.getElementById('filter-processing').checked,
+                    completed: document.getElementById('filter-completed').checked
+                };
+
+                const events = data.tasks
+                    .filter(task => filters[task.status] || (task.status === 'completed' && filters.completed))
+                    .map(task => {
+                        let color = '#3B82F6'; // Blue (active)
+                        if (task.status === 'processing') color = '#EAB308'; // Yellow
+                        if (task.status === 'completed') color = '#22C55E'; // Green
+                        
+                        // Check for expired/zombie
+                        const now = Date.now() / 1000;
+                        if (task.status === 'processing' && task.metadata?.locked_at && (now - task.metadata.locked_at > 300)) {
+                            color = '#EF4444'; // Red (Zombie)
+                        }
+
+                        return {
+                            id: task.id,
+                            title: `${task.schedule_type} (${task.status})`,
+                            start: task.next_execution_iso || new Date(task.created_at * 1000).toISOString(),
+                            backgroundColor: color,
+                            borderColor: color,
+                            extendedProps: task
+                        };
+                    });
+                
+                successCallback(events);
+            } catch (error) {
+                console.error('Error fetching tasks:', error);
+                failureCallback(error);
+            }
+        }
+
+        function showTaskDetails(task) {
+            const modal = document.getElementById('modal');
+            const title = document.getElementById('modal-title');
+            const content = document.getElementById('modal-content');
+            
+            title.textContent = `Task: ${task.id}`;
+            content.textContent = JSON.stringify(task, null, 2);
+            modal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
