@@ -62,7 +62,9 @@ class Database:
             CREATE TABLE IF NOT EXISTS execution_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT NOT NULL,
+                execution_id TEXT,
                 executed_at INTEGER NOT NULL,
+                expired_at INTEGER,
                 status TEXT,
                 execution_time_ms INTEGER,
                 error TEXT,
@@ -172,7 +174,7 @@ class Database:
             await self.conn.commit()
             return cursor.rowcount > 0
 
-    async def claim_task(self, task_id: str, worker_id: str, lease_timeout: int = 300) -> bool:
+    async def claim_task(self, task_id: str, worker_id: str, lease_timeout: int = 300) -> Optional[str]:
         """
         Atomically claim a task for execution
         
@@ -182,7 +184,7 @@ class Database:
             lease_timeout: How long the claim is valid for (seconds)
             
         Returns:
-            True if claimed successfully
+            execution_id if claimed successfully, None otherwise
         """
         now = int(time.time())
         
@@ -199,11 +201,16 @@ class Database:
         current_status = task["status"]
         metadata = task.get("metadata") or {}
         
-        # Case 1: Active task
+        # Generate execution_id for this claim
+        import uuid
+        execution_id = str(uuid.uuid4())
+        
+        # Case 1: Active task - allow parallel execution
         if current_status == "active":
             metadata["locked_by"] = worker_id
             metadata["locked_at"] = now
-            return await self.update_task(
+            metadata["current_execution_id"] = execution_id
+            success = await self.update_task(
                 task_id,
                 updates={
                     "status": "processing",
@@ -211,24 +218,28 @@ class Database:
                 },
                 condition={"status": "active"}
             )
+            return execution_id if success else None
             
-        # Case 2: Zombie task (processing but expired)
+        # Case 2: Allow parallel execution - always allow claiming even if processing
+        # This enables multiple instances to run in parallel
         elif current_status == "processing":
-            locked_at = metadata.get("locked_at", 0)
-            if now - locked_at > lease_timeout:
-                # Lease expired, we can steal it
-                metadata["locked_by"] = worker_id
-                metadata["locked_at"] = now
-                return await self.update_task(
-                    task_id,
-                    updates={
-                        "status": "processing",
-                        "metadata": metadata
-                    },
-                    condition={"status": "processing"}  # Optimistic lock on status
-                )
+            # Always allow new claim for parallel execution
+            # Store execution_id in a list to track multiple concurrent executions
+            execution_ids = metadata.get("execution_ids", [])
+            execution_ids.append(execution_id)
+            metadata["execution_ids"] = execution_ids
+            metadata["current_execution_id"] = execution_id
+            metadata["locked_by"] = worker_id  # Update to latest worker
+            metadata["locked_at"] = now
+            success = await self.update_task(
+                task_id,
+                updates={
+                    "metadata": metadata
+                }
+            )
+            return execution_id if success else None
         
-        return False
+        return None
     
     async def add_to_time_bucket(self, bucket_time: int, task_id: str):
         """Add task to time bucket"""
@@ -326,14 +337,14 @@ class Database:
         
         return tasks
     
-    async def record_execution(self, task_id: str, executed_at: int, status: str,
-                              execution_time_ms: Optional[int] = None,
-                              error: Optional[str] = None):
+    async def record_execution(self, task_id: str, execution_id: Optional[str], executed_at: int, 
+                              status: str, execution_time_ms: Optional[int] = None,
+                              error: Optional[str] = None, expired_at: Optional[int] = None):
         """Record task execution in history"""
         await self.conn.execute("""
-            INSERT INTO execution_history (task_id, executed_at, status, execution_time_ms, error)
-            VALUES (?, ?, ?, ?, ?)
-        """, (task_id, executed_at, status, execution_time_ms, error))
+            INSERT INTO execution_history (task_id, execution_id, executed_at, expired_at, status, execution_time_ms, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (task_id, execution_id, executed_at, expired_at, status, execution_time_ms, error))
         await self.conn.commit()
     
     async def get_execution_history(self, task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
@@ -349,8 +360,11 @@ class Database:
         history = []
         for row in rows:
             history.append({
+                "execution_id": row.get("execution_id"),
                 "executed_at": row["executed_at"],
                 "executed_at_iso": datetime.utcfromtimestamp(row["executed_at"]).isoformat() + "Z",
+                "expired_at": row.get("expired_at"),
+                "expired_at_iso": datetime.utcfromtimestamp(row["expired_at"]).isoformat() + "Z" if row.get("expired_at") else None,
                 "status": row["status"],
                 "execution_time_ms": row["execution_time_ms"],
                 "error": row["error"]
@@ -446,6 +460,82 @@ class Database:
         """) as cursor:
             row = await cursor.fetchone()
             return row["count"] if row else 0
+    
+    async def get_expired_tasks(self, current_time: int, max_age_seconds: int = 60) -> List[Dict[str, Any]]:
+        """
+        Get tasks that should be expired (not claimed within max_age_seconds)
+        
+        Args:
+            current_time: Current Unix timestamp
+            max_age_seconds: Maximum age in seconds before expiration (default: 60)
+            
+        Returns:
+            List of tasks that should be expired
+        """
+        expired_threshold = current_time - max_age_seconds
+        async with self.conn.execute("""
+            SELECT * FROM tasks
+            WHERE status = 'active'
+            AND next_execution IS NOT NULL
+            AND next_execution <= ?
+        """, (expired_threshold,)) as cursor:
+            rows = await cursor.fetchall()
+        
+        tasks = []
+        for row in rows:
+            tasks.append({
+                "id": row["id"],
+                "schedule_type": row["schedule_type"],
+                "created_at": row["created_at"],
+                "payload": json.loads(row["payload"]),
+                "schedule_config": json.loads(row["schedule_config"]),
+                "status": row["status"],
+                "metadata": json.loads(row["metadata"]) if row["metadata"] else None,
+                "next_execution": row["next_execution"]
+            })
+        
+        return tasks
+    
+    async def update_execution_status(self, execution_id: str, new_status: str) -> bool:
+        """
+        Update execution status by execution_id (for late acknowledgments)
+        
+        Args:
+            execution_id: Execution ID to update
+            new_status: New status (e.g., "success", "failed")
+            
+        Returns:
+            True if updated successfully
+        """
+        async with self.conn.execute("""
+            UPDATE execution_history
+            SET status = ?
+            WHERE execution_id = ?
+        """, (new_status, execution_id)) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount > 0
+    
+    async def get_execution_by_id(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """Get execution record by execution_id"""
+        async with self.conn.execute("""
+            SELECT * FROM execution_history
+            WHERE execution_id = ?
+        """, (execution_id,)) as cursor:
+            row = await cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        return {
+            "id": row["id"],
+            "task_id": row["task_id"],
+            "execution_id": row.get("execution_id"),
+            "executed_at": row["executed_at"],
+            "expired_at": row.get("expired_at"),
+            "status": row["status"],
+            "execution_time_ms": row["execution_time_ms"],
+            "error": row["error"]
+        }
     
     async def get_next_task_time(self, schedule_types: List[str], current_time: int) -> Optional[int]:
         """Get the next task execution time for given types"""

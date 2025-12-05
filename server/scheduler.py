@@ -164,12 +164,15 @@ class Scheduler:
         )
         
         # Filter to only tasks actually due (second-level precision)
+        # Exclude tasks that should be expired (older than 1 minute)
+        expired_threshold = current_time - 60
         due_tasks = []
         for task in tasks:
             # Get full task to check exact execution time
             full_task = await self.db.get_task(task["task_id"])
             if full_task and full_task["next_execution"]:
-                if full_task["next_execution"] <= current_time:
+                # Only include if due and not expired
+                if full_task["next_execution"] <= current_time and full_task["next_execution"] > expired_threshold:
                     due_tasks.append(task)
                     if len(due_tasks) >= limit:
                         break
@@ -179,7 +182,8 @@ class Scheduler:
     async def acknowledge_task(self, task_id: str, status: str,
                               execution_time_ms: Optional[int] = None,
                               error: Optional[str] = None,
-                              worker_id: Optional[str] = None) -> Optional[str]:
+                              worker_id: Optional[str] = None,
+                              execution_id: Optional[str] = None) -> Optional[str]:
         """
         Acknowledge task execution and schedule next occurrence if recurring
         
@@ -198,30 +202,39 @@ class Scheduler:
         if DEBUG:
             logger.debug(f"Task {task_id} status: {task['status']}")
         
-        if task["status"] not in ["active", "processing"]:
+        if task["status"] not in ["active", "processing", "expired"]:
             if DEBUG:
                 logger.debug(f"Task {task_id} has invalid status: {task['status']}")
-            raise ValueError(f"Task {task_id} is not active or processing (status: {task['status']})")
+            raise ValueError(f"Task {task_id} is not active, processing, or expired (status: {task['status']})")
             
-        # Verify lock (Fencing Token)
-        if worker_id:
-            metadata = task.get("metadata") or {}
-            locked_by = metadata.get("locked_by")
-            if DEBUG:
-                logger.debug(f"Task {task_id} lock check: locked_by={locked_by}, worker_id={worker_id}")
-            if locked_by and locked_by != worker_id:
+        # Use provided execution_id or extract from metadata
+        metadata = task.get("metadata") or {}
+        if not execution_id:
+            execution_id = metadata.get("current_execution_id")
+        
+        # Check if task is expired - if so, this might be a late ack
+        is_expired = task["status"] == "expired"
+        
+        # If expired and we have execution_id, check if this execution exists
+        if is_expired and execution_id:
+            existing_execution = await self.db.get_execution_by_id(execution_id)
+            if existing_execution and existing_execution["status"] == "expired":
                 if DEBUG:
-                    logger.debug(f"Lock mismatch for task {task_id}")
-                raise ValueError(f"Lock mismatch: Task claimed by {locked_by}, but acknowledged by {worker_id}")
+                    logger.debug(f"Late ack for expired execution {execution_id}, updating status")
+                # This is a late ack - update the execution status
+                await self.db.update_execution_status(execution_id, status)
+                # Don't schedule next execution for expired tasks that get late ack
+                return None
         
         executed_at = int(time.time())
         
         if DEBUG:
-            logger.debug(f"Recording execution for task {task_id}")
+            logger.debug(f"Recording execution for task {task_id} with execution_id={execution_id}")
         
         # Record execution
         await self.db.record_execution(
             task_id=task_id,
+            execution_id=execution_id,
             executed_at=executed_at,
             status=status,
             execution_time_ms=execution_time_ms,
@@ -236,12 +249,18 @@ class Scheduler:
         
         # Calculate next execution
         schedule_config = task["schedule_config"]
+        # Pass the scheduled time (next_execution) instead of completion time
+        scheduled_time = task.get("next_execution", executed_at)
+        # Add scheduled_time to config for calculate_next_execution to use
+        schedule_config_with_time = schedule_config.copy()
+        schedule_config_with_time["scheduled_time"] = scheduled_time
+        
         if DEBUG:
-            logger.debug(f"Calculating next execution for task {task_id} with config: {schedule_config}")
+            logger.debug(f"Calculating next execution for task {task_id} with config: {schedule_config_with_time}, scheduled_time={scheduled_time}")
         
         try:
             next_execution = self.time_parser.calculate_next_execution(
-                schedule_config,
+                schedule_config_with_time,
                 executed_at
             )
             if DEBUG:
@@ -266,11 +285,20 @@ class Scheduler:
                 repeat = schedule_config["repeat"]
                 if DEBUG:
                     logger.debug(f"Updating execution count for recurring task {task_id}. Repeat config: {repeat}")
-                if "execution_count" in repeat:
-                    repeat["execution_count"] = repeat.get("execution_count", 0) + 1
-                    await self.db.update_task(task_id, {
-                        "schedule_config": schedule_config
-                    })
+                # Always increment execution_count for recurring tasks
+                execution_count = repeat.get("execution_count", 0)
+                repeat["execution_count"] = execution_count + 1
+                await self.db.update_task(task_id, {
+                    "schedule_config": schedule_config
+                })
+                
+                # Check if max executions reached
+                times = repeat.get("times")
+                if times is not None and repeat["execution_count"] >= times:
+                    if DEBUG:
+                        logger.debug(f"Task {task_id} reached max executions ({times}), marking as completed")
+                    await self.db.update_task(task_id, {"status": "completed"})
+                    return None  # No more executions
             
             # Add to new time bucket
             if DEBUG:
@@ -337,8 +365,12 @@ class Scheduler:
         
         for task in active_tasks:
             schedule_config = task["schedule_config"]
+            # Add scheduled_time to config for calculate_next_execution
+            scheduled_time = task.get("next_execution", current_time)
+            schedule_config_with_time = schedule_config.copy()
+            schedule_config_with_time["scheduled_time"] = scheduled_time
             next_execution = self.time_parser.calculate_next_execution(
-                schedule_config,
+                schedule_config_with_time,
                 current_time
             )
             
@@ -360,6 +392,87 @@ class Scheduler:
         if next_time:
             return datetime.utcfromtimestamp(next_time).isoformat() + "Z"
         return None
+    
+    async def expire_unclaimed_tasks(self, max_age_seconds: int = 60):
+        """
+        Expire tasks that haven't been claimed within max_age_seconds
+        
+        Args:
+            max_age_seconds: Maximum age in seconds before expiration (default: 60)
+        """
+        import uuid
+        current_time = int(time.time())
+        expired_tasks = await self.db.get_expired_tasks(current_time, max_age_seconds)
+        
+        if DEBUG:
+            logger.debug(f"Found {len(expired_tasks)} tasks to expire")
+        
+        for task in expired_tasks:
+            task_id = task["id"]
+            schedule_config = task["schedule_config"]
+            
+            if DEBUG:
+                logger.debug(f"Expiring task {task_id}")
+            
+            # Generate execution_id for tracking (even though never claimed)
+            execution_id = str(uuid.uuid4())
+            expired_at = current_time
+            
+            # Record as expired
+            await self.db.record_execution(
+                task_id=task_id,
+                execution_id=execution_id,
+                executed_at=task["next_execution"],  # Use scheduled time
+                expired_at=expired_at,
+                status="expired"
+            )
+            
+            # Remove from time bucket
+            if task["next_execution"]:
+                await self.db.remove_from_time_bucket(task["next_execution"], task_id)
+            
+            # Increment execution_count if recurring
+            if "repeat" in schedule_config:
+                repeat = schedule_config["repeat"]
+                if "execution_count" in repeat:
+                    repeat["execution_count"] = repeat.get("execution_count", 0) + 1
+                    await self.db.update_task(task_id, {
+                        "schedule_config": schedule_config
+                    })
+            
+            # Check if task should be completed
+            when = schedule_config.get("when", {})
+            when_type = when.get("type", "once")
+            
+            if when_type == "once":
+                # One-time task: mark as expired
+                await self.db.update_task(task_id, {"status": "expired"})
+            elif when_type == "recurring":
+                # Check if max executions reached
+                repeat = schedule_config.get("repeat", {})
+                times = repeat.get("times")
+                execution_count = repeat.get("execution_count", 0)
+                
+                if times is not None and execution_count >= times:
+                    # Max executions reached, mark as completed
+                    await self.db.update_task(task_id, {"status": "completed"})
+                else:
+                    # Calculate next execution
+                    schedule_config_with_time = schedule_config.copy()
+                    schedule_config_with_time["scheduled_time"] = task["next_execution"]
+                    next_execution = self.time_parser.calculate_next_execution(
+                        schedule_config_with_time,
+                        current_time
+                    )
+                    
+                    if next_execution:
+                        await self.db.update_task(task_id, {
+                            "next_execution": next_execution,
+                            "status": "active"  # Keep active for next execution
+                        })
+                        await self.db.add_to_time_bucket(next_execution, task_id)
+                    else:
+                        await self.db.update_task(task_id, {"status": "completed"})
 
 
 

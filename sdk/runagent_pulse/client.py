@@ -132,12 +132,12 @@ class PulseClient:
         
         return response.json()
     
-    def claim_task(self, task_id: str) -> bool:
+    def claim_task(self, task_id: str) -> Optional[str]:
         """
         Try to claim a task
         
         Returns:
-            True if claimed successfully
+            execution_id if claimed successfully, None otherwise
         """
         try:
             response = requests.post(
@@ -145,15 +145,26 @@ class PulseClient:
                 headers=self.headers,
                 json={"worker_id": self.worker_id}
             )
-            return response.status_code == 200
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("execution_id")
+            return None
         except requests.exceptions.RequestException:
-            return False
+            return None
 
     def acknowledge(self, task_id: str, status: str = "success",
                    execution_time_ms: Optional[int] = None,
-                   error: Optional[str] = None) -> Optional[str]:
+                   error: Optional[str] = None,
+                   execution_id: Optional[str] = None) -> Optional[str]:
         """
         Acknowledge task execution
+        
+        Args:
+            task_id: Task ID
+            status: Execution status (success/failed)
+            execution_time_ms: Execution time in milliseconds
+            error: Error message if failed
+            execution_id: Execution ID from claim (optional, will be extracted if not provided)
         
         Returns:
             Next execution time (ISO) or None
@@ -165,7 +176,8 @@ class PulseClient:
                 "status": status,
                 "execution_time_ms": execution_time_ms,
                 "error": error,
-                "worker_id": self.worker_id
+                "worker_id": self.worker_id,
+                "execution_id": execution_id
             }
         )
         response.raise_for_status()
@@ -297,7 +309,8 @@ class PulseClient:
                         continue
                     
                     # Try to claim the task
-                    if not self.claim_task(task_id):
+                    execution_id = self.claim_task(task_id)
+                    if not execution_id:
                         continue
                     
                     # Prepare callback arguments
@@ -311,10 +324,10 @@ class PulseClient:
                             start_time = time.time()
                             result = callback(**callback_kwargs)
                             execution_time = int((time.time() - start_time) * 1000)
-                            self.acknowledge(task_id, "success", execution_time_ms=execution_time)
+                            self.acknowledge(task_id, "success", execution_time_ms=execution_time, execution_id=execution_id)
                         except Exception as e:
                             logger.error(f"Task {task_id} failed: {e}")
-                            self.acknowledge(task_id, "failed", error=str(e))
+                            self.acknowledge(task_id, "failed", error=str(e), execution_id=execution_id)
                 
                 time.sleep(current_interval)
                 

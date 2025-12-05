@@ -272,15 +272,16 @@ class TimeParser:
             if times is not None and execution_count >= times:
                 return None  # No more executions
             
-            # Calculate next execution
-            last_execution = schedule_config.get("last_execution", current_time)
-            next_execution = last_execution + interval_seconds
+            # Calculate next execution from scheduled time, not completion time
+            # Use the scheduled time from the task's next_execution field
+            scheduled_time = schedule_config.get("scheduled_time", current_time)
+            next_execution = scheduled_time + interval_seconds
             
             # Ensure it's in the future
             if next_execution <= current_time:
                 # Calculate how many intervals have passed
-                intervals_passed = (current_time - last_execution) // interval_seconds + 1
-                next_execution = last_execution + (intervals_passed * interval_seconds)
+                intervals_passed = (current_time - scheduled_time) // interval_seconds + 1
+                next_execution = scheduled_time + (intervals_passed * interval_seconds)
             
             return next_execution
             

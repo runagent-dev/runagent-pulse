@@ -51,6 +51,8 @@ async def lifespan(app: FastAPI):
     """Initialize and cleanup resources"""
     global db, scheduler, time_parser
     
+    import asyncio
+    
     logger.info(f"Starting RunAgent Pulse server (DEBUG={DEBUG})")
     if DEBUG:
         logger.debug("DEBUG MODE: Detailed logging enabled")
@@ -62,11 +64,29 @@ async def lifespan(app: FastAPI):
     scheduler = Scheduler(db, time_parser)
     await scheduler.restore_state()
     
+    # Start background expiration checker
+    async def expiration_checker():
+        while True:
+            try:
+                await scheduler.expire_unclaimed_tasks(max_age_seconds=60)
+            except Exception as e:
+                logger.error(f"Error in expiration checker: {e}", exc_info=DEBUG)
+            await asyncio.sleep(30)  # Check every 30 seconds
+    
+    expiration_task = asyncio.create_task(expiration_checker())
+    
     logger.info("Server startup complete")
     if DEBUG:
         logger.debug("DEBUG MODE: All components initialized")
     
-    yield
+    try:
+        yield
+    finally:
+        expiration_task.cancel()
+        try:
+            await expiration_task
+        except asyncio.CancelledError:
+            pass
     
     # Cleanup
     if db:
@@ -126,6 +146,7 @@ class AckRequest(BaseModel):
     execution_time_ms: Optional[int] = None
     error: Optional[str] = None
     worker_id: str
+    execution_id: Optional[str] = None
 
 class AckResponse(BaseModel):
     next_execution: Optional[str] = None
@@ -247,10 +268,10 @@ async def claim_task(
 ):
     """Claim a task for execution"""
     try:
-        success = await scheduler.claim_task(task_id, request.worker_id)
-        if not success:
+        execution_id = await scheduler.claim_task(task_id, request.worker_id)
+        if not execution_id:
             raise HTTPException(status_code=409, detail="Task already claimed or not active")
-        return {"status": "claimed"}
+        return {"status": "claimed", "execution_id": execution_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -272,7 +293,8 @@ async def acknowledge_task(
             status=request.status,
             execution_time_ms=request.execution_time_ms,
             error=request.error,
-            worker_id=request.worker_id
+            worker_id=request.worker_id,
+            execution_id=request.execution_id
         )
         
         if DEBUG:
