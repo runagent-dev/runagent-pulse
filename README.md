@@ -1,5 +1,7 @@
 # RunAgent Pulse
 
+> **Google calendar for your agent**
+
 RunAgent Pulse is a lightweight, self-hosted scheduling service designed for AI agents and developers. It provides second-level precision task scheduling with a simple API and a callback-based execution model.
 
 ## Features

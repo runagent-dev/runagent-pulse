@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import os
 import time
+import logging
 from typing import Optional, List
 from pydantic import BaseModel
 import hashlib
@@ -21,6 +22,24 @@ from server.time_parser import TimeParser
 API_KEY = os.getenv("PULSE_API_KEY", "")
 DB_PATH = os.getenv("PULSE_DB_PATH", "/app/data/pulse.db")
 TIMEZONE = os.getenv("PULSE_TIMEZONE", "UTC")
+DEBUG = os.getenv("PULSE_DEBUG", "false").lower() == "true"
+
+# Configure logging - DEBUG mode uses DEBUG level, otherwise INFO
+log_level = logging.DEBUG if DEBUG else logging.INFO
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True  # Override any existing configuration
+)
+logger = logging.getLogger("runagent_pulse")
+logger.setLevel(log_level)
+
+# Set level for child loggers
+logging.getLogger("runagent_pulse.scheduler").setLevel(log_level)
+logging.getLogger("runagent_pulse.time_parser").setLevel(log_level)
+
+if DEBUG:
+    logger.info("Debug mode enabled")
 
 # Global instances
 db: Optional[Database] = None
@@ -32,12 +51,20 @@ async def lifespan(app: FastAPI):
     """Initialize and cleanup resources"""
     global db, scheduler, time_parser
     
+    logger.info(f"Starting RunAgent Pulse server (DEBUG={DEBUG})")
+    if DEBUG:
+        logger.debug("DEBUG MODE: Detailed logging enabled")
+    
     # Initialize
     db = Database(DB_PATH)
     await db.initialize()
     time_parser = TimeParser(timezone=TIMEZONE)
     scheduler = Scheduler(db, time_parser)
     await scheduler.restore_state()
+    
+    logger.info("Server startup complete")
+    if DEBUG:
+        logger.debug("DEBUG MODE: All components initialized")
     
     yield
     
@@ -120,6 +147,9 @@ async def schedule_task(
     _: bool = Depends(verify_api_key)
 ):
     """Schedule a new task"""
+    if DEBUG:
+        logger.debug(f"Schedule request received: schedule_type={request.schedule_type}, when={request.when}, repeat={request.repeat}, payload_keys={list(request.payload.keys()) if request.payload else []}")
+    
     try:
         task_id = await scheduler.schedule_task(
             schedule_type=request.schedule_type,
@@ -129,20 +159,36 @@ async def schedule_task(
             metadata=request.metadata
         )
         
+        if DEBUG:
+            logger.debug(f"Task scheduled successfully: task_id={task_id}")
+        
         task = await db.get_task(task_id)
         if not task:
             raise HTTPException(status_code=500, detail="Failed to retrieve created task")
         
+        # Use next_execution_iso from database, or convert if not available
+        next_execution_iso = task.get("next_execution_iso")
+        if not next_execution_iso and task.get("next_execution"):
+            from datetime import datetime
+            next_execution_iso = datetime.utcfromtimestamp(task["next_execution"]).isoformat() + "Z"
+        
         return ScheduleResponse(
             task_id=task_id,
             schedule_type=task["schedule_type"],
-            next_execution=task["next_execution"],
+            next_execution=next_execution_iso or "",
             status=task["status"]
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = str(e)
+        if DEBUG:
+            logger.debug(f"Validation error: {error_msg}", exc_info=True)
+        else:
+            logger.warning(f"Validation error: {error_msg}")
+        raise HTTPException(status_code=400, detail=error_msg)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+        error_msg = f"Internal error: {str(e)}"
+        logger.error(error_msg, exc_info=DEBUG)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @app.get("/tasks/poll", response_model=PollResponse)
 async def poll_tasks(
@@ -346,7 +392,15 @@ if __name__ == "__main__":
     import uvicorn
     host = os.getenv("PULSE_HOST", "0.0.0.0")
     port = int(os.getenv("PULSE_PORT", "8000"))
-    uvicorn.run(app, host=host, port=port)
+    # Set uvicorn log level based on DEBUG flag
+    uvicorn_log_level = "debug" if DEBUG else "info"
+    uvicorn.run(
+        app, 
+        host=host, 
+        port=port,
+        log_level=uvicorn_log_level,
+        access_log=True
+    )
 
 
 

@@ -4,11 +4,16 @@ Manages task scheduling, time buckets, and state restoration
 """
 import time
 import uuid
+import logging
+import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from server.database import Database
 from server.time_parser import TimeParser
+
+DEBUG = os.getenv("PULSE_DEBUG", "false").lower() == "true"
+logger = logging.getLogger("runagent_pulse.scheduler")
 
 class Scheduler:
     def __init__(self, db: Database, time_parser: TimeParser):
@@ -26,13 +31,87 @@ class Scheduler:
         task_id = str(uuid.uuid4())
         created_at = int(time.time())
         
+        if DEBUG:
+            logger.debug(f"Scheduling task: schedule_type={schedule_type}, when={when}, repeat={repeat}")
+        
+        # If repeat is provided separately, convert when to recurring type
+        if repeat and when.get("type") != "recurring":
+            if DEBUG:
+                logger.debug(f"Converting one-time schedule to recurring: when={when}, repeat={repeat}")
+            
+            # If when has "natural" language, parse it first to get a delay
+            if "natural" in when:
+                natural_time = when["natural"]
+                if DEBUG:
+                    logger.debug(f"Parsing natural language time: {natural_time}")
+                
+                # Special case: "now" means start immediately
+                if natural_time.strip().lower() == "now":
+                    if DEBUG:
+                        logger.debug("Natural time is 'now', starting immediately")
+                    when = {
+                        "type": "recurring",
+                        "repeat": repeat
+                    }
+                else:
+                    # Parse natural language to get timestamp, then convert to delay
+                    parsed_timestamp, _ = self.time_parser.parse({"type": "once", "natural": natural_time})
+                    current_time = int(time.time())
+                    delay_seconds = parsed_timestamp - current_time
+                    if delay_seconds < 0:
+                        delay_seconds = 0
+                    if DEBUG:
+                        logger.debug(f"Natural time parsed: timestamp={parsed_timestamp}, delay_seconds={delay_seconds}")
+                    
+                    # Convert to delay format (e.g., "5m")
+                    if delay_seconds == 0:
+                        # Start immediately - no delay field needed
+                        when = {
+                            "type": "recurring",
+                            "repeat": repeat
+                        }
+                    else:
+                        # Convert seconds to delay string
+                        if delay_seconds < 60:
+                            delay_str = f"{delay_seconds}s"
+                        elif delay_seconds < 3600:
+                            delay_str = f"{delay_seconds // 60}m"
+                        elif delay_seconds < 86400:
+                            delay_str = f"{delay_seconds // 3600}h"
+                        else:
+                            delay_str = f"{delay_seconds // 86400}d"
+                        when = {
+                            "type": "recurring",
+                            "delay": delay_str,
+                            "repeat": repeat
+                        }
+                if DEBUG:
+                    logger.debug(f"Converted to recurring format: {when}")
+            else:
+                # Convert to recurring format, preserving time/delay fields
+                when = {
+                    "type": "recurring",
+                    **{k: v for k, v in when.items() if k != "type"},
+                    "repeat": repeat
+                }
+                if DEBUG:
+                    logger.debug(f"Converted to recurring format (preserving fields): {when}")
+        
         # Parse schedule
         schedule_config = {"when": when}
-        if repeat:
-            schedule_config["repeat"] = repeat
+        
+        if DEBUG:
+            logger.debug(f"Parsing schedule config: {schedule_config}")
         
         # Calculate first execution time
-        next_execution, recurrence = self.time_parser.parse(when)
+        try:
+            next_execution, recurrence = self.time_parser.parse(when)
+            if DEBUG:
+                logger.debug(f"Parsed schedule: next_execution={next_execution}, recurrence={recurrence}")
+        except Exception as e:
+            if DEBUG:
+                logger.debug(f"Error parsing schedule: {str(e)}", exc_info=True)
+            raise
         
         if recurrence:
             schedule_config["repeat"] = recurrence

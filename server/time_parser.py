@@ -9,7 +9,12 @@ from croniter import croniter
 import pytz
 import re
 import time
+import logging
+import os
 from typing import Optional
+
+DEBUG = os.getenv("PULSE_DEBUG", "false").lower() == "true"
+logger = logging.getLogger("runagent_pulse.time_parser")
 
 class TimeParser:
     def __init__(self, timezone: str = "UTC"):
@@ -28,14 +33,31 @@ class TimeParser:
         """
         when_type = when.get("type", "once")
         
-        if when_type == "once":
-            return self._parse_once(when)
-        elif when_type == "recurring":
-            return self._parse_recurring(when)
-        elif when_type == "cron":
-            return self._parse_cron(when)
-        else:
-            raise ValueError(f"Unknown schedule type: {when_type}")
+        if DEBUG:
+            logger.debug(f"Parsing when dict: {when}, type={when_type}")
+        
+        try:
+            if when_type == "once":
+                result = self._parse_once(when)
+                if DEBUG:
+                    logger.debug(f"Parsed once: {result}")
+                return result
+            elif when_type == "recurring":
+                result = self._parse_recurring(when)
+                if DEBUG:
+                    logger.debug(f"Parsed recurring: {result}")
+                return result
+            elif when_type == "cron":
+                result = self._parse_cron(when)
+                if DEBUG:
+                    logger.debug(f"Parsed cron: {result}")
+                return result
+            else:
+                raise ValueError(f"Unknown schedule type: {when_type}")
+        except Exception as e:
+            if DEBUG:
+                logger.debug(f"Error parsing when={when}: {str(e)}", exc_info=True)
+            raise
     
     def _parse_once(self, when: dict) -> tuple[int, None]:
         """Parse one-time execution"""
@@ -66,6 +88,9 @@ class TimeParser:
         interval = repeat.get("interval", "1d")
         times = repeat.get("times")  # None = infinite
         
+        if DEBUG:
+            logger.debug(f"Parsing recurring task: repeat={repeat}, interval={interval}, times={times}")
+        
         # Calculate first execution
         if "time" in when:
             dt = date_parser.parse(when["time"])
@@ -73,22 +98,34 @@ class TimeParser:
                 dt = self.timezone.localize(dt)
             dt = dt.astimezone(self.utc)
             first_execution = int(dt.timestamp())
+            if DEBUG:
+                logger.debug(f"First execution from time: {first_execution}")
         elif "delay" in when:
             delay_seconds = self._parse_delay(when["delay"])
             next_time = datetime.now(self.utc) + timedelta(seconds=delay_seconds)
             first_execution = int(next_time.timestamp())
+            if DEBUG:
+                logger.debug(f"First execution from delay: {first_execution} (delay={when['delay']})")
         else:
             # Start immediately
             first_execution = int(time.time())
+            if DEBUG:
+                logger.debug(f"First execution immediately: {first_execution}")
         
         # Calculate interval in seconds
         interval_seconds = self._parse_interval(interval)
+        
+        if DEBUG:
+            logger.debug(f"Interval parsed: {interval} -> {interval_seconds} seconds")
         
         recurrence = {
             "interval_seconds": interval_seconds,
             "times": times,
             "execution_count": 0
         }
+        
+        if DEBUG:
+            logger.debug(f"Recurrence config: {recurrence}")
         
         return first_execution, recurrence
     
@@ -140,11 +177,15 @@ class TimeParser:
     def _parse_natural_language(self, natural_str: str) -> int:
         """
         Parse natural language time expressions
-        Examples: "tomorrow at 2pm", "in 5 minutes", "next Monday at 9am"
+        Examples: "tomorrow at 2pm", "in 5 minutes", "next Monday at 9am", "now"
         """
         natural_str = natural_str.strip().lower()
         # Use server timezone for natural language interpretation
         now = datetime.now(self.timezone)
+        
+        # Handle "now" - return current time immediately
+        if natural_str == "now":
+            return int(now.astimezone(self.utc).timestamp())
         
         # "in X minutes/hours/days"
         in_match = re.match(r'^in\s+(\d+)\s+(minute|minutes|hour|hours|day|days|second|seconds)s?$', natural_str)

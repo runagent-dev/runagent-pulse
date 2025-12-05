@@ -2,15 +2,8 @@ import sys
 import os
 import time
 
-# Add root to path so we can import sdk
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+from runagent_pulse.client import PulseClient
 
-try:
-    from sdk.runagent_pulse.client import PulseClient
-except ImportError:
-    print("Error: Could not import PulseClient. Make sure you are running this script from the project root or have installed the SDK.")
-    print("Try running: export PYTHONPATH=$PYTHONPATH:$(pwd)")
-    sys.exit(1)
 
 def main():
     server_url = os.getenv("PULSE_SERVER_URL", "http://localhost:8000")
