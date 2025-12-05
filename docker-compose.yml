@@ -11,7 +11,7 @@ services:
     environment:
       - PULSE_API_KEY=${PULSE_API_KEY:-}
       - PULSE_TIMEZONE=UTC
-      - PULSE_LOG_LEVEL=INFO
+      - PULSE_DEBUG=${PULSE_DEBUG:-true}
       - PULSE_DB_PATH=/app/data/pulse.db
     restart: unless-stopped
 

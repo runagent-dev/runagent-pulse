@@ -26,6 +26,8 @@ venv/
 env/
 ENV/
 
+pulse-data/
+
 # IDE
 .vscode/
 .idea/
