@@ -32,21 +32,22 @@ def main():
     # Register callback for task type
     schedule_type = "test_task_v2"
     
-    @client.on_trigger(schedule_type)
+    # Set allow_extra=True to receive task_id and scheduled_for metadata
+    # Set to False (default) to receive only payload fields
+    @client.on_trigger(schedule_type, allow_extra=False)
     def handle_test_task(
         message: str,
         timestamp: float,
-        task_id: str,
-        scheduled_for: str
+        task_type: str,
     ):
         """Handle incoming task execution"""
         now = datetime.datetime.now().strftime("%H:%M:%S")
         
+        
         print(f"\n{'='*60}")
         print(f"[{now}] ✅ Received Task")
         print(f"{'='*60}")
-        print(f"   Task ID:     {task_id}")
-        print(f"   Scheduled:   {scheduled_for}")
+        print(f"   Task Type:     {task_type}")
         print(f"   Message:     {message}")
         print(f"   Origin Time: {datetime.datetime.fromtimestamp(timestamp).strftime('%H:%M:%S')}")
         print(f"\n   ⏳ Processing... (simulating 2s work)")

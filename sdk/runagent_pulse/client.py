@@ -51,7 +51,7 @@ class PulseClient:
         self.headers["Content-Type"] = "application/json"
         
         self.time_parser = TimeParser()
-        self.callbacks: Dict[str, List[Callable]] = {}
+        self.callbacks: Dict[str, List[tuple[Callable, bool]]] = {}
         self.polling = False
         self.poll_thread: Optional[threading.Thread] = None
         self.worker_id = f"worker-{int(time.time())}-{threading.get_ident()}"
@@ -246,12 +246,20 @@ class PulseClient:
         data = response.json()
         return data.get("history", [])
     
-    def on_trigger(self, schedule_type: str):
-        """Register callback for schedule type"""
+    def on_trigger(self, schedule_type: str, allow_extra: bool = False):
+        """
+        Register callback for schedule type
+        
+        Args:
+            schedule_type: Type of task to listen for
+            allow_extra: If True, passes task_id and scheduled_for to callback.
+                        If False (default), only payload fields are passed.
+        """
         def decorator(func: Callable):
             if schedule_type not in self.callbacks:
                 self.callbacks[schedule_type] = []
-            self.callbacks[schedule_type].append(func)
+            # Store callback as tuple (func, allow_extra)
+            self.callbacks[schedule_type].append((func, allow_extra))
             return func
         return decorator
     
@@ -313,13 +321,18 @@ class PulseClient:
                     if not execution_id:
                         continue
                     
-                    # Prepare callback arguments
-                    callback_kwargs = payload.copy()
-                    callback_kwargs["task_id"] = task_id
-                    callback_kwargs["scheduled_for"] = task.get("scheduled_for")
-                    
                     # Call each callback
-                    for callback in callbacks:
+                    for callback_info in callbacks:
+                        callback, allow_extra = callback_info
+                        
+                        # Prepare callback arguments
+                        callback_kwargs = payload.copy()
+                        
+                        # Add extra metadata only if allowed
+                        if allow_extra:
+                            callback_kwargs["task_id"] = task_id
+                            callback_kwargs["scheduled_for"] = task.get("scheduled_for")
+                        
                         try:
                             start_time = time.time()
                             result = callback(**callback_kwargs)

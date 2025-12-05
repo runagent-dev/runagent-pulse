@@ -116,7 +116,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">When</label>
                     <select id="form-when-type" onchange="updateWhenInput()" 
-                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent mb-2">
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent mb-2">
                         <option value="once">Once (ISO datetime)</option>
                         <option value="delay">Delay (relative)</option>
                         <option value="cron">Cron expression</option>
@@ -147,14 +147,14 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">Payload (JSON)</label>
                     <textarea id="form-payload" required rows="6"
-                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm"
+                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent font-mono text-sm"
                               placeholder='{"key": "value"}'></textarea>
                 </div>
 
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">Metadata (JSON, optional)</label>
                     <textarea id="form-metadata" rows="4"
-                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm"
+                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent font-mono text-sm"
                               placeholder='{"created_by": "user123"}'></textarea>
                 </div>
 
@@ -177,6 +177,7 @@
         let pollInterval;
         let currentTask = null;
         let isEditMode = false;
+        let countdownInterval = null;
 
         document.addEventListener('DOMContentLoaded', function() {
             const calendarEl = document.getElementById('calendar');
@@ -265,6 +266,12 @@
             const title = document.getElementById('modal-title');
             const content = document.getElementById('task-content');
             
+            // Clear any existing countdown interval
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+                countdownInterval = null;
+            }
+            
             title.textContent = `Task: ${task.schedule_type}`;
             
             const statusColors = {
@@ -289,6 +296,18 @@
                         </span>
                         <span class="text-sm text-gray-500">ID: ${task.id}</span>
                     </div>
+                    
+                    ${task.next_execution_iso && task.status !== 'completed' && task.status !== 'cancelled' ? `
+                    <div class="bg-gradient-to-r from-cyan-50 to-teal-50 rounded-lg p-6 border-2 border-cyan-200">
+                        <p class="text-xs text-gray-600 mb-2 font-medium">Time Until Execution</p>
+                        <div id="countdown-timer" class="text-3xl font-bold text-cyan-700 font-mono">
+                            <span id="countdown-days">0</span>d 
+                            <span id="countdown-hours">0</span>h 
+                            <span id="countdown-minutes">0</span>m 
+                            <span id="countdown-seconds">0</span>s
+                        </div>
+                    </div>
+                    ` : ''}
                     
                     <div class="grid grid-cols-2 gap-4">
                         <div class="bg-gray-50 rounded-lg p-4">
@@ -324,9 +343,57 @@
             `;
             
             modal.classList.remove('hidden');
+            
+            // Start countdown if task has next execution
+            if (task.next_execution_iso && task.status !== 'completed' && task.status !== 'cancelled') {
+                startCountdown(task.next_execution_iso);
+            }
+        }
+        
+        function startCountdown(nextExecutionISO) {
+            const targetTime = new Date(nextExecutionISO).getTime();
+            
+            function updateCountdown() {
+                const now = Date.now();
+                const diff = targetTime - now;
+                
+                if (diff <= 0) {
+                    // Time has passed
+                    document.getElementById('countdown-days').textContent = '0';
+                    document.getElementById('countdown-hours').textContent = '0';
+                    document.getElementById('countdown-minutes').textContent = '0';
+                    document.getElementById('countdown-seconds').textContent = '0';
+                    if (countdownInterval) {
+                        clearInterval(countdownInterval);
+                        countdownInterval = null;
+                    }
+                    return;
+                }
+                
+                const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+                const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+                
+                document.getElementById('countdown-days').textContent = days;
+                document.getElementById('countdown-hours').textContent = hours;
+                document.getElementById('countdown-minutes').textContent = minutes;
+                document.getElementById('countdown-seconds').textContent = seconds;
+            }
+            
+            // Update immediately
+            updateCountdown();
+            
+            // Update every second
+            countdownInterval = setInterval(updateCountdown, 1000);
         }
 
         function closeTaskModal() {
+            // Clear countdown interval when closing modal
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+                countdownInterval = null;
+            }
             document.getElementById('task-modal').classList.add('hidden');
             currentTask = null;
         }
