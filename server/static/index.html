@@ -234,9 +234,12 @@
                 const events = data.tasks
                     .filter(task => filters[task.status] || (task.status === 'completed' && filters.completed))
                     .map(task => {
+                        const isWebhook = task.metadata?.is_webhook === true;
+
                         let color = '#06b6d4'; // Cyan (active)
                         if (task.status === 'processing') color = '#EAB308'; // Yellow
                         if (task.status === 'completed') color = '#22C55E'; // Green
+                        if (isWebhook) color = '#0ea5e9'; // Blue for webhook
                         
                         const now = Date.now() / 1000;
                         if (task.status === 'processing' && task.metadata?.locked_at && (now - task.metadata.locked_at > 300)) {
@@ -245,7 +248,7 @@
 
                         return {
                             id: task.id,
-                            title: `${task.schedule_type} (${task.status})`,
+                            title: `${task.schedule_type} (${task.status})${isWebhook ? ' [webhook]' : ''}`,
                             start: task.next_execution_iso || new Date(task.created_at * 1000).toISOString(),
                             backgroundColor: color,
                             borderColor: color,
@@ -288,6 +291,12 @@
                 : 'N/A';
             const created = new Date(task.created_at * 1000).toLocaleString();
             
+            const isWebhook = task.metadata?.is_webhook === true;
+            const webhookUrl = task.metadata?.webhook_url;
+            const webhookTimeout = task.metadata?.webhook_timeout;
+            const webhookRetries = task.metadata?.webhook_retries;
+            const webhookAttempts = task.metadata?.webhook_attempts;
+
             content.innerHTML = `
                 <div class="space-y-4">
                     <div class="flex items-center justify-between">
@@ -295,6 +304,16 @@
                             ${task.status}
                         </span>
                         <span class="text-sm text-gray-500">ID: ${task.id}</span>
+                    </div>
+                    
+                    <div class="flex flex-wrap gap-2">
+                        <span class="px-2 py-1 rounded-full text-xs font-semibold ${isWebhook ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700'}">
+                            ${isWebhook ? 'Webhook' : 'Polling'}
+                        </span>
+                        ${isWebhook && webhookUrl ? `<span class="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-700">URL: ${webhookUrl}</span>` : ''}
+                        ${isWebhook && webhookTimeout ? `<span class="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-700">Timeout: ${webhookTimeout}s</span>` : ''}
+                        ${isWebhook && webhookRetries !== undefined ? `<span class="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-700">Retries: ${webhookRetries}</span>` : ''}
+                        ${isWebhook && webhookAttempts !== undefined ? `<span class="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-700">Attempts: ${webhookAttempts}</span>` : ''}
                     </div>
                     
                     ${task.next_execution_iso && task.status !== 'completed' && task.status !== 'cancelled' ? `

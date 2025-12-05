@@ -10,19 +10,23 @@ import os
 import time
 import logging
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, AnyHttpUrl
 import hashlib
 import json
 
 from server.database import Database
 from server.scheduler import Scheduler
 from server.time_parser import TimeParser
+from server.webhook_executor import WebhookExecutor
 
 # Configuration
 API_KEY = os.getenv("PULSE_API_KEY", "")
 DB_PATH = os.getenv("PULSE_DB_PATH", "/app/data/pulse.db")
 TIMEZONE = os.getenv("PULSE_TIMEZONE", "UTC")
 DEBUG = os.getenv("PULSE_DEBUG", "false").lower() == "true"
+WEBHOOK_DEFAULT_TIMEOUT = int(os.getenv("PULSE_WEBHOOK_TIMEOUT", "30"))
+WEBHOOK_DEFAULT_RETRIES = int(os.getenv("PULSE_WEBHOOK_RETRIES", "3"))
+WEBHOOK_WORKER_INTERVAL = int(os.getenv("PULSE_WEBHOOK_INTERVAL", "10"))
 
 # Configure logging - DEBUG mode uses DEBUG level, otherwise INFO
 log_level = logging.DEBUG if DEBUG else logging.INFO
@@ -62,6 +66,10 @@ async def lifespan(app: FastAPI):
     await db.initialize()
     time_parser = TimeParser(timezone=TIMEZONE)
     scheduler = Scheduler(db, time_parser)
+    webhook_executor = WebhookExecutor(
+        default_timeout=WEBHOOK_DEFAULT_TIMEOUT,
+        default_retries=WEBHOOK_DEFAULT_RETRIES,
+    )
     await scheduler.restore_state()
     
     # Start background expiration checker
@@ -74,6 +82,100 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(30)  # Check every 30 seconds
     
     expiration_task = asyncio.create_task(expiration_checker())
+
+    async def webhook_worker():
+        worker_id = "webhook-worker"
+        while True:
+            try:
+                current_time = int(time.time())
+                tasks = await db.get_due_webhook_tasks(current_time, limit=100)
+
+                for task in tasks:
+                    task_id = task["task_id"]
+                    metadata = task.get("metadata") or {}
+                    max_retries = metadata.get("webhook_retries", WEBHOOK_DEFAULT_RETRIES)
+                    attempts = metadata.get("webhook_attempts", 0)
+
+                    # Guard against stuck tasks that already exhausted retries
+                    if attempts >= max_retries:
+                        metadata["webhook_final_failure"] = True
+                        await db.update_task(task_id, {"metadata": metadata})
+                        await scheduler.acknowledge_task(
+                            task_id=task_id,
+                            status="failed",
+                            error="max retries exceeded",
+                            worker_id=worker_id,
+                            execution_id=None,
+                        )
+                        continue
+
+                    execution_id = await scheduler.claim_task(task_id, worker_id)
+                    if not execution_id:
+                        continue
+
+                    if DEBUG:
+                        logger.debug(f"Executing webhook for task {task_id} (attempt {attempts + 1}/{max_retries})")
+                    success, error_message = await webhook_executor.execute_webhook(task, execution_id)
+
+                    if success:
+                        if DEBUG:
+                            logger.debug(f"Webhook successful for task {task_id}")
+                        # Reset attempts on success
+                        if attempts:
+                            metadata["webhook_attempts"] = 0
+                            await db.update_task(task_id, {"metadata": metadata})
+                        await scheduler.acknowledge_task(
+                            task_id=task_id,
+                            status="success",
+                            worker_id=worker_id,
+                            execution_id=execution_id,
+                        )
+                        continue
+
+                    # Failure: increment attempts and decide on retry/final failure
+                    attempts += 1
+                    metadata["webhook_attempts"] = attempts
+                    if DEBUG:
+                        logger.debug(f"Webhook failed for task {task_id}: {error_message} (attempt {attempts}/{max_retries})")
+
+                    await db.record_execution(
+                        task_id=task_id,
+                        execution_id=execution_id,
+                        executed_at=int(time.time()),
+                        status="failed",
+                        error=error_message,
+                    )
+
+                    if attempts >= max_retries:
+                        metadata["webhook_final_failure"] = True
+                        await db.update_task(task_id, {"metadata": metadata})
+                        await scheduler.acknowledge_task(
+                            task_id=task_id,
+                            status="failed",
+                            error=error_message,
+                            worker_id=worker_id,
+                            execution_id=execution_id,
+                        )
+                        continue
+
+                    # Retry with exponential backoff (1s, 2s, 4s, capped at 60s)
+                    backoff_seconds = min(2 ** (attempts - 1), 60)
+                    next_run = int(time.time()) + backoff_seconds
+
+                    # Update task for retry
+                    await db.update_task(task_id, {
+                        "status": "active",
+                        "next_execution": next_run,
+                        "metadata": metadata
+                    })
+                    await db.add_to_time_bucket(next_run, task_id)
+
+            except Exception as e:
+                logger.error(f"Error in webhook worker: {e}", exc_info=DEBUG)
+
+            await asyncio.sleep(WEBHOOK_WORKER_INTERVAL)
+
+    webhook_worker_task = asyncio.create_task(webhook_worker())
     
     logger.info("Server startup complete")
     if DEBUG:
@@ -85,6 +187,11 @@ async def lifespan(app: FastAPI):
         expiration_task.cancel()
         try:
             await expiration_task
+        except asyncio.CancelledError:
+            pass
+        webhook_worker_task.cancel()
+        try:
+            await webhook_worker_task
         except asyncio.CancelledError:
             pass
     
@@ -130,6 +237,9 @@ class ScheduleRequest(BaseModel):
     payload: dict
     repeat: Optional[dict] = None
     metadata: Optional[dict] = None
+    webhook_url: Optional[AnyHttpUrl] = None
+    webhook_timeout: Optional[int] = None
+    webhook_retries: Optional[int] = None
 
 class ScheduleResponse(BaseModel):
     task_id: str
@@ -170,6 +280,12 @@ async def schedule_task(
     """Schedule a new task"""
     if DEBUG:
         logger.debug(f"Schedule request received: schedule_type={request.schedule_type}, when={request.when}, repeat={request.repeat}, payload_keys={list(request.payload.keys()) if request.payload else []}")
+
+    # Basic validation for webhook parameters
+    if request.webhook_timeout is not None and request.webhook_timeout <= 0:
+        raise HTTPException(status_code=400, detail="webhook_timeout must be > 0")
+    if request.webhook_retries is not None and request.webhook_retries < 0:
+        raise HTTPException(status_code=400, detail="webhook_retries must be >= 0")
     
     try:
         task_id = await scheduler.schedule_task(
@@ -177,7 +293,10 @@ async def schedule_task(
             when=request.when,
             payload=request.payload,
             repeat=request.repeat,
-            metadata=request.metadata
+            metadata=request.metadata,
+            webhook_url=request.webhook_url,
+            webhook_timeout=request.webhook_timeout or WEBHOOK_DEFAULT_TIMEOUT,
+            webhook_retries=request.webhook_retries or WEBHOOK_DEFAULT_RETRIES,
         )
         
         if DEBUG:

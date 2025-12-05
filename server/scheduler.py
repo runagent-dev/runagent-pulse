@@ -21,7 +21,10 @@ class Scheduler:
         self.time_parser = time_parser
         
     async def schedule_task(self, schedule_type: str, when: dict, payload: dict,
-                           repeat: Optional[dict] = None, metadata: Optional[dict] = None) -> str:
+                           repeat: Optional[dict] = None, metadata: Optional[dict] = None,
+                           webhook_url: Optional[str] = None,
+                           webhook_timeout: Optional[int] = None,
+                           webhook_retries: Optional[int] = None) -> str:
         """
         Schedule a new task
         
@@ -97,6 +100,17 @@ class Scheduler:
                 if DEBUG:
                     logger.debug(f"Converted to recurring format (preserving fields): {when}")
         
+        # Merge metadata and attach webhook config if provided
+        merged_metadata = metadata.copy() if metadata else {}
+        if webhook_url:
+            # Convert httpx.Url object back to string for JSON serialization
+            webhook_url_str = str(webhook_url) if webhook_url else None
+            merged_metadata["webhook_url"] = webhook_url_str
+            merged_metadata["is_webhook"] = True
+            merged_metadata["webhook_timeout"] = webhook_timeout or 30
+            merged_metadata["webhook_retries"] = webhook_retries or 3
+            merged_metadata.setdefault("webhook_attempts", 0)
+        
         # Parse schedule
         schedule_config = {"when": when}
         
@@ -123,7 +137,7 @@ class Scheduler:
             created_at=created_at,
             payload=payload,
             schedule_config=schedule_config,
-            metadata=metadata,
+            metadata=merged_metadata if merged_metadata else None,
             next_execution=next_execution
         )
         
@@ -132,7 +146,7 @@ class Scheduler:
         
         return task_id
     
-    async def claim_task(self, task_id: str, worker_id: str) -> bool:
+    async def claim_task(self, task_id: str, worker_id: str) -> Optional[str]:
         """
         Claim a task for execution
         
@@ -141,7 +155,7 @@ class Scheduler:
             worker_id: Worker ID
             
         Returns:
-            True if claimed successfully
+            execution_id if claimed successfully, None otherwise
         """
         return await self.db.claim_task(task_id, worker_id)
     
@@ -201,7 +215,14 @@ class Scheduler:
         
         if DEBUG:
             logger.debug(f"Task {task_id} status: {task['status']}")
-        
+
+        # Handle tasks that are already in final states
+        if task["status"] in ["completed", "cancelled", "paused"]:
+            logger.warning(f"Ignoring acknowledgment for {task['status']} task {task_id}")
+            if DEBUG:
+                logger.debug(f"Task {task_id} is already {task['status']} - ignoring acknowledgment")
+            return None  # No next execution for final state tasks
+
         if task["status"] not in ["active", "processing", "expired"]:
             if DEBUG:
                 logger.debug(f"Task {task_id} has invalid status: {task['status']}")
@@ -246,6 +267,15 @@ class Scheduler:
             if DEBUG:
                 logger.debug(f"Removing task {task_id} from time bucket {task['next_execution']}")
             await self.db.remove_from_time_bucket(task["next_execution"], task_id)
+
+        # If webhook final failure was flagged, stop further scheduling
+        if metadata.get("is_webhook") and metadata.get("webhook_final_failure") and status == "failed":
+            await self.db.update_task(task_id, {
+                "status": "failed",
+                "metadata": metadata,
+                "next_execution": None
+            })
+            return None
         
         # Calculate next execution
         schedule_config = task["schedule_config"]
@@ -286,15 +316,16 @@ class Scheduler:
                 if DEBUG:
                     logger.debug(f"Updating execution count for recurring task {task_id}. Repeat config: {repeat}")
                 # Always increment execution_count for recurring tasks
-                execution_count = repeat.get("execution_count", 0)
-                repeat["execution_count"] = execution_count + 1
+                execution_count = repeat.get("execution_count", 0) + 1
+                repeat["execution_count"] = execution_count
+
                 await self.db.update_task(task_id, {
                     "schedule_config": schedule_config
                 })
-                
+
                 # Check if max executions reached
                 times = repeat.get("times")
-                if times is not None and repeat["execution_count"] >= times:
+                if times is not None and execution_count >= times:
                     if DEBUG:
                         logger.debug(f"Task {task_id} reached max executions ({times}), marking as completed")
                     await self.db.update_task(task_id, {"status": "completed"})
@@ -392,7 +423,7 @@ class Scheduler:
         if next_time:
             return datetime.utcfromtimestamp(next_time).isoformat() + "Z"
         return None
-    
+
     async def expire_unclaimed_tasks(self, max_age_seconds: int = 60):
         """
         Expire tasks that haven't been claimed within max_age_seconds

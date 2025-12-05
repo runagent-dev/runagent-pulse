@@ -35,7 +35,7 @@ class TimeParser:
         
         if DEBUG:
             logger.debug(f"Parsing when dict: {when}, type={when_type}")
-        
+
         try:
             if when_type == "once":
                 result = self._parse_once(when)

@@ -318,13 +318,42 @@ class Database:
         query = f"""
             SELECT * FROM tasks
             WHERE id IN ({placeholders})
-            AND schedule_type IN ({type_placeholders})
-            AND status = 'active'
+              AND schedule_type IN ({type_placeholders})
+              AND status = 'active'
+              AND COALESCE(json_extract(metadata, '$.is_webhook'), 0) = 0
         """
         
         async with self.conn.execute(query, list(task_ids) + schedule_types) as cursor:
             rows = await cursor.fetchall()
             
+        tasks = []
+        for row in rows:
+            tasks.append({
+                "task_id": row["id"],
+                "schedule_type": row["schedule_type"],
+                "payload": json.loads(row["payload"]),
+                "scheduled_for": datetime.utcfromtimestamp(row["next_execution"]).isoformat() + "Z" if row["next_execution"] else None,
+                "metadata": json.loads(row["metadata"]) if row["metadata"] else None
+            })
+        
+        return tasks
+
+    async def get_due_webhook_tasks(self, current_time: int, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Get due webhook tasks (status=active, is_webhook=true, next_execution <= current_time)
+        """
+        async with self.conn.execute("""
+            SELECT *
+            FROM tasks
+            WHERE status = 'active'
+              AND next_execution IS NOT NULL
+              AND next_execution <= ?
+              AND COALESCE(json_extract(metadata, '$.is_webhook'), 0) = 1
+            ORDER BY next_execution ASC
+            LIMIT ?
+        """, (current_time, limit)) as cursor:
+            rows = await cursor.fetchall()
+        
         tasks = []
         for row in rows:
             tasks.append({

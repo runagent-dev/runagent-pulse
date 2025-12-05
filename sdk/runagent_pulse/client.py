@@ -58,7 +58,10 @@ class PulseClient:
         
     def schedule(self, schedule_type: str, when: Any, payload: Dict[str, Any],
                 repeat: Optional[Dict[str, Any]] = None,
-                metadata: Optional[Dict[str, Any]] = None) -> PulseTask:
+                metadata: Optional[Dict[str, Any]] = None,
+                webhook_url: Optional[str] = None,
+                webhook_timeout: Optional[int] = None,
+                webhook_retries: Optional[int] = None) -> PulseTask:
         """
         Schedule a task
         
@@ -68,6 +71,9 @@ class PulseClient:
             payload: Task payload data
             repeat: Optional repeat configuration
             metadata: Optional metadata
+            webhook_url: Optional webhook target URL
+            webhook_timeout: Optional timeout seconds (default server-side)
+            webhook_retries: Optional retry attempts (default server-side)
             
         Returns:
             PulseTask instance
@@ -83,7 +89,10 @@ class PulseClient:
                 "when": when_dict,
                 "payload": payload,
                 "repeat": repeat,
-                "metadata": metadata
+                "metadata": metadata,
+                "webhook_url": webhook_url,
+                "webhook_timeout": webhook_timeout,
+                "webhook_retries": webhook_retries,
             }
         )
         response.raise_for_status()
@@ -309,30 +318,29 @@ class PulseClient:
                     task_id = task["task_id"]
                     schedule_type = task["schedule_type"]
                     payload = task["payload"]
-                    
+
                     # Get callbacks for this type
                     callbacks = self.callbacks.get(schedule_type, [])
-                    
+
                     if not callbacks:
                         continue
-                    
+
                     # Try to claim the task
                     execution_id = self.claim_task(task_id)
                     if not execution_id:
                         continue
-                    
+
                     # Call each callback
                     for callback_info in callbacks:
                         callback, allow_extra = callback_info
-                        
+
                         # Prepare callback arguments
                         callback_kwargs = payload.copy()
-                        
                         # Add extra metadata only if allowed
                         if allow_extra:
                             callback_kwargs["task_id"] = task_id
                             callback_kwargs["scheduled_for"] = task.get("scheduled_for")
-                        
+
                         try:
                             start_time = time.time()
                             result = callback(**callback_kwargs)
@@ -365,7 +373,10 @@ class PulseClient:
                 when=task_spec["when"],
                 payload=task_spec["payload"],
                 repeat=task_spec.get("repeat"),
-                metadata=task_spec.get("metadata")
+                metadata=task_spec.get("metadata"),
+                webhook_url=task_spec.get("webhook_url"),
+                webhook_timeout=task_spec.get("webhook_timeout"),
+                webhook_retries=task_spec.get("webhook_retries"),
             )
             results.append(task)
         return results
