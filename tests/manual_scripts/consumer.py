@@ -23,7 +23,7 @@ def main():
     client.worker_id = worker_id
     print(f"Worker ID: {worker_id}")
 
-    @client.on_trigger("test_task")
+    @client.on_trigger("test_task_v2")
     def handle_test_task(message: str, timestamp: float, task_id: str, scheduled_for: str):
         now = datetime.datetime.now().strftime("%H:%M:%S")
         print(f"\n[{now}] [CONSUMER] Received task {task_id}")
@@ -34,7 +34,9 @@ def main():
         time.sleep(2)
         print("  - Done!")
 
-    print("\nStarting consumer... Waiting for 'test_task'...")
+    # Automatically polls for all registered trigger types
+    registered_types = list(client.callbacks.keys())
+    print(f"\nStarting consumer... Waiting for {registered_types}...")
     print("Press Ctrl+C to stop.")
     
     client.start_polling(poll_interval=5)

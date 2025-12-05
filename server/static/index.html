@@ -8,49 +8,175 @@
     <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
     <style>
         .fc-event { cursor: pointer; }
+        .gradient-bg {
+            background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+        }
+        .pulse-logo {
+            background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
     </style>
 </head>
-<body class="bg-gray-100 h-screen flex flex-col">
-    <nav class="bg-white shadow-sm p-4">
-        <div class="container mx-auto flex justify-between items-center">
-            <h1 class="text-xl font-bold text-gray-800">RunAgent Pulse</h1>
-            <div class="flex gap-4 items-center">
-                <label class="flex items-center space-x-2">
-                    <input type="checkbox" id="filter-active" checked class="form-checkbox text-blue-600">
-                    <span class="text-sm text-gray-600">Pending</span>
-                </label>
-                <label class="flex items-center space-x-2">
-                    <input type="checkbox" id="filter-processing" checked class="form-checkbox text-yellow-600">
-                    <span class="text-sm text-gray-600">Claimed</span>
-                </label>
-                <label class="flex items-center space-x-2">
-                    <input type="checkbox" id="filter-completed" class="form-checkbox text-green-600">
-                    <span class="text-sm text-gray-600">Completed</span>
-                </label>
+<body class="bg-gray-50 h-screen flex flex-col">
+    <nav class="bg-white shadow-sm border-b border-gray-200">
+        <div class="container mx-auto px-6 py-4">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 gradient-bg rounded-lg flex items-center justify-center">
+                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="text-2xl font-bold pulse-logo">RunAgent Pulse</h1>
+                        <p class="text-xs text-gray-500">Scheduling service for AI agents</p>
+                    </div>
+                </div>
+                <div class="flex gap-6 items-center">
+                    <button onclick="openCreateModal()" class="bg-gradient-to-r from-cyan-500 to-teal-600 text-white px-4 py-2 rounded-lg hover:from-cyan-600 hover:to-teal-700 transition-all shadow-sm flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                        </svg>
+                        Create Task
+                    </button>
+                    <div class="flex gap-4 items-center">
+                        <label class="flex items-center space-x-2 cursor-pointer">
+                            <input type="checkbox" id="filter-active" checked class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                            <span class="text-sm text-gray-600">Pending</span>
+                        </label>
+                        <label class="flex items-center space-x-2 cursor-pointer">
+                            <input type="checkbox" id="filter-processing" checked class="w-4 h-4 text-yellow-600 rounded focus:ring-yellow-500">
+                            <span class="text-sm text-gray-600">Claimed</span>
+                        </label>
+                        <label class="flex items-center space-x-2 cursor-pointer">
+                            <input type="checkbox" id="filter-completed" class="w-4 h-4 text-green-600 rounded focus:ring-green-500">
+                            <span class="text-sm text-gray-600">Completed</span>
+                        </label>
+                    </div>
+                </div>
             </div>
         </div>
     </nav>
 
-    <div class="flex-1 container mx-auto p-4 overflow-hidden">
-        <div class="bg-white rounded-lg shadow h-full p-4">
+    <div class="flex-1 container mx-auto p-6 overflow-hidden">
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 h-full p-6">
             <div id='calendar' class="h-full"></div>
         </div>
     </div>
 
     <!-- Task Details Modal -->
-    <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
-        <div class="bg-white rounded-lg p-6 max-w-lg w-full">
-            <h2 id="modal-title" class="text-xl font-bold mb-4">Task Details</h2>
-            <pre id="modal-content" class="bg-gray-100 p-4 rounded overflow-auto max-h-96 text-sm"></pre>
-            <div class="mt-4 flex justify-end">
-                <button onclick="closeModal()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Close</button>
+    <div id="task-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+                <h2 id="modal-title" class="text-2xl font-bold text-gray-800">Task Details</h2>
+                <button onclick="closeTaskModal()" class="text-gray-400 hover:text-gray-600 transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
             </div>
+            <div id="task-content" class="p-6">
+                <!-- Task details will be rendered here -->
+            </div>
+            <div class="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3">
+                <button onclick="openEditModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                    Edit
+                </button>
+                <button onclick="deleteTask()" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition">
+                    Delete
+                </button>
+                <button onclick="closeTaskModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create/Edit Task Modal -->
+    <div id="form-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+                <h2 id="form-modal-title" class="text-2xl font-bold text-gray-800">Create Task</h2>
+                <button onclick="closeFormModal()" class="text-gray-400 hover:text-gray-600 transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <form id="task-form" onsubmit="handleFormSubmit(event)" class="p-6 space-y-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Schedule Type</label>
+                    <input type="text" id="form-schedule-type" required 
+                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+                           placeholder="e.g., send_email, check_status">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">When</label>
+                    <select id="form-when-type" onchange="updateWhenInput()" 
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent mb-2">
+                        <option value="once">Once (ISO datetime)</option>
+                        <option value="delay">Delay (relative)</option>
+                        <option value="cron">Cron expression</option>
+                    </select>
+                    <input type="text" id="form-when-value" required 
+                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+                           placeholder="2024-12-05T14:30:00Z or 5m or 0 9 * * *">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Repeat (optional)</label>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Times (leave empty for infinite)</label>
+                            <input type="number" id="form-repeat-times" 
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+                                   placeholder="5">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Interval</label>
+                            <input type="text" id="form-repeat-interval" 
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+                                   placeholder="1d, 5m, 2h">
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Payload (JSON)</label>
+                    <textarea id="form-payload" required rows="6"
+                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm"
+                              placeholder='{"key": "value"}'></textarea>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Metadata (JSON, optional)</label>
+                    <textarea id="form-metadata" rows="4"
+                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm"
+                              placeholder='{"created_by": "user123"}'></textarea>
+                </div>
+
+                <div class="sticky bottom-0 bg-white border-t border-gray-200 -mx-6 -mb-6 px-6 py-4 flex justify-end gap-3">
+                    <button type="button" onclick="closeFormModal()" 
+                            class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                        Cancel
+                    </button>
+                    <button type="submit" 
+                            class="px-4 py-2 bg-gradient-to-r from-cyan-500 to-teal-600 text-white rounded-lg hover:from-cyan-600 hover:to-teal-700 transition">
+                        Save Task
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 
     <script>
         let calendar;
         let pollInterval;
+        let currentTask = null;
+        let isEditMode = false;
 
         document.addEventListener('DOMContentLoaded', function() {
             const calendarEl = document.getElementById('calendar');
@@ -89,7 +215,6 @@
                 const start = Math.floor(info.start.valueOf() / 1000);
                 const end = Math.floor(info.end.valueOf() / 1000);
                 
-                // Build query
                 const params = new URLSearchParams({
                     start_time: start,
                     end_time: end,
@@ -108,11 +233,10 @@
                 const events = data.tasks
                     .filter(task => filters[task.status] || (task.status === 'completed' && filters.completed))
                     .map(task => {
-                        let color = '#3B82F6'; // Blue (active)
+                        let color = '#06b6d4'; // Cyan (active)
                         if (task.status === 'processing') color = '#EAB308'; // Yellow
                         if (task.status === 'completed') color = '#22C55E'; // Green
                         
-                        // Check for expired/zombie
                         const now = Date.now() / 1000;
                         if (task.status === 'processing' && task.metadata?.locked_at && (now - task.metadata.locked_at > 300)) {
                             color = '#EF4444'; // Red (Zombie)
@@ -136,17 +260,266 @@
         }
 
         function showTaskDetails(task) {
-            const modal = document.getElementById('modal');
+            currentTask = task;
+            const modal = document.getElementById('task-modal');
             const title = document.getElementById('modal-title');
-            const content = document.getElementById('modal-content');
+            const content = document.getElementById('task-content');
             
-            title.textContent = `Task: ${task.id}`;
-            content.textContent = JSON.stringify(task, null, 2);
+            title.textContent = `Task: ${task.schedule_type}`;
+            
+            const statusColors = {
+                'active': 'bg-blue-100 text-blue-800',
+                'processing': 'bg-yellow-100 text-yellow-800',
+                'completed': 'bg-green-100 text-green-800',
+                'cancelled': 'bg-gray-100 text-gray-800'
+            };
+            
+            const statusColor = statusColors[task.status] || 'bg-gray-100 text-gray-800';
+            
+            const nextExec = task.next_execution_iso 
+                ? new Date(task.next_execution_iso).toLocaleString()
+                : 'N/A';
+            const created = new Date(task.created_at * 1000).toLocaleString();
+            
+            content.innerHTML = `
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <span class="px-3 py-1 rounded-full text-sm font-medium ${statusColor}">
+                            ${task.status}
+                        </span>
+                        <span class="text-sm text-gray-500">ID: ${task.id}</span>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <p class="text-xs text-gray-500 mb-1">Schedule Type</p>
+                            <p class="font-semibold text-gray-800">${task.schedule_type}</p>
+                        </div>
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <p class="text-xs text-gray-500 mb-1">Next Execution</p>
+                            <p class="font-semibold text-gray-800">${nextExec}</p>
+                        </div>
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <p class="text-xs text-gray-500 mb-1">Created At</p>
+                            <p class="font-semibold text-gray-800">${created}</p>
+                        </div>
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <p class="text-xs text-gray-500 mb-1">Schedule Config</p>
+                            <p class="font-semibold text-gray-800 text-sm">${JSON.stringify(task.schedule_config, null, 2).substring(0, 50)}...</p>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <p class="text-sm font-medium text-gray-700 mb-2">Payload</p>
+                        <pre class="bg-gray-50 rounded-lg p-4 text-sm overflow-x-auto border border-gray-200">${JSON.stringify(task.payload, null, 2)}</pre>
+                    </div>
+                    
+                    ${task.metadata ? `
+                    <div>
+                        <p class="text-sm font-medium text-gray-700 mb-2">Metadata</p>
+                        <pre class="bg-gray-50 rounded-lg p-4 text-sm overflow-x-auto border border-gray-200">${JSON.stringify(task.metadata, null, 2)}</pre>
+                    </div>
+                    ` : ''}
+                </div>
+            `;
+            
             modal.classList.remove('hidden');
         }
 
-        function closeModal() {
-            document.getElementById('modal').classList.add('hidden');
+        function closeTaskModal() {
+            document.getElementById('task-modal').classList.add('hidden');
+            currentTask = null;
+        }
+
+        function openCreateModal() {
+            isEditMode = false;
+            document.getElementById('form-modal-title').textContent = 'Create Task';
+            document.getElementById('task-form').reset();
+            document.getElementById('form-when-type').value = 'once';
+            updateWhenInput();
+            document.getElementById('form-modal').classList.remove('hidden');
+        }
+
+        function openEditModal() {
+            if (!currentTask) return;
+            isEditMode = true;
+            document.getElementById('form-modal-title').textContent = 'Edit Task';
+            
+            // Populate form with current task data
+            document.getElementById('form-schedule-type').value = currentTask.schedule_type;
+            
+            const scheduleConfig = currentTask.schedule_config || {};
+            const when = scheduleConfig.when || {};
+            
+            // Determine when type and value
+            if (when.type === 'once' || when.time) {
+                document.getElementById('form-when-type').value = 'once';
+                document.getElementById('form-when-value').value = when.time || '';
+            } else if (when.delay) {
+                document.getElementById('form-when-type').value = 'delay';
+                document.getElementById('form-when-value').value = when.delay || '';
+            } else if (when.cron) {
+                document.getElementById('form-when-type').value = 'cron';
+                document.getElementById('form-when-value').value = when.cron || '';
+            } else {
+                // Default to once if we can't determine
+                document.getElementById('form-when-type').value = 'once';
+                document.getElementById('form-when-value').value = '';
+            }
+            updateWhenInput();
+            
+            const repeat = scheduleConfig.repeat || {};
+            document.getElementById('form-repeat-times').value = repeat.times !== undefined && repeat.times !== null ? repeat.times : '';
+            document.getElementById('form-repeat-interval').value = repeat.interval || '';
+            
+            document.getElementById('form-payload').value = JSON.stringify(currentTask.payload, null, 2);
+            document.getElementById('form-metadata').value = currentTask.metadata ? JSON.stringify(currentTask.metadata, null, 2) : '';
+            
+            closeTaskModal();
+            document.getElementById('form-modal').classList.remove('hidden');
+        }
+
+        function closeFormModal() {
+            document.getElementById('form-modal').classList.add('hidden');
+            isEditMode = false;
+        }
+
+        function updateWhenInput() {
+            const type = document.getElementById('form-when-type').value;
+            const input = document.getElementById('form-when-value');
+            
+            switch(type) {
+                case 'once':
+                    input.placeholder = '2024-12-05T14:30:00Z';
+                    break;
+                case 'delay':
+                    input.placeholder = '5m, 2h, 1d';
+                    break;
+                case 'cron':
+                    input.placeholder = '0 9 * * *';
+                    break;
+            }
+        }
+
+        async function handleFormSubmit(event) {
+            event.preventDefault();
+            
+            const scheduleType = document.getElementById('form-schedule-type').value;
+            const whenType = document.getElementById('form-when-type').value;
+            const whenValue = document.getElementById('form-when-value').value;
+            const repeatTimes = document.getElementById('form-repeat-times').value;
+            const repeatInterval = document.getElementById('form-repeat-interval').value;
+            const payloadText = document.getElementById('form-payload').value;
+            const metadataText = document.getElementById('form-metadata').value;
+            
+            try {
+                let payload, metadata;
+                payload = JSON.parse(payloadText);
+                metadata = metadataText ? JSON.parse(metadataText) : null;
+                
+                const when = {};
+                if (whenType === 'once') {
+                    when.type = 'once';
+                    when.time = whenValue;
+                } else if (whenType === 'delay') {
+                    when.delay = whenValue;
+                } else if (whenType === 'cron') {
+                    when.cron = whenValue;
+                }
+                
+                const repeat = {};
+                if (repeatTimes) {
+                    repeat.times = parseInt(repeatTimes);
+                }
+                if (repeatInterval) {
+                    repeat.interval = repeatInterval;
+                }
+                
+                if (isEditMode && currentTask) {
+                    // Update task - send updates in the format expected by PATCH endpoint
+                    const updates = {
+                        schedule_type: scheduleType,
+                        payload: payload,
+                        schedule_config: {
+                            when: when,
+                            repeat: Object.keys(repeat).length > 0 ? repeat : null
+                        },
+                        metadata: metadata
+                    };
+                    
+                    const response = await fetch(`/tasks/${currentTask.id}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(updates)
+                    });
+                    
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || 'Failed to update task');
+                    }
+                    
+                    closeFormModal();
+                    calendar.refetchEvents();
+                    alert('Task updated successfully!');
+                } else {
+                    // Create task
+                    const requestBody = {
+                        schedule_type: scheduleType,
+                        when: when,
+                        payload: payload,
+                        repeat: Object.keys(repeat).length > 0 ? repeat : null,
+                        metadata: metadata
+                    };
+                    
+                    const response = await fetch('/tasks/schedule', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(requestBody)
+                    });
+                    
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || 'Failed to create task');
+                    }
+                    
+                    closeFormModal();
+                    calendar.refetchEvents();
+                    alert('Task created successfully!');
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+                console.error('Form submit error:', error);
+            }
+        }
+
+        async function deleteTask() {
+            if (!currentTask) return;
+            
+            if (!confirm(`Are you sure you want to delete task "${currentTask.schedule_type}"?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/tasks/${currentTask.id}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to delete task');
+                }
+                
+                closeTaskModal();
+                calendar.refetchEvents();
+                alert('Task deleted successfully!');
+            } catch (error) {
+                alert('Error: ' + error.message);
+                console.error('Delete error:', error);
+            }
         }
     </script>
 </body>

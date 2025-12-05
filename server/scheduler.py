@@ -186,21 +186,38 @@ class Scheduler:
         Returns:
             next_execution timestamp (ISO format) or None
         """
+        if DEBUG:
+            logger.debug(f"Acknowledging task {task_id}: status={status}, worker_id={worker_id}, execution_time_ms={execution_time_ms}, error={error}")
+        
         task = await self.db.get_task(task_id)
         if not task:
+            if DEBUG:
+                logger.debug(f"Task {task_id} not found")
             raise ValueError(f"Task {task_id} not found")
         
+        if DEBUG:
+            logger.debug(f"Task {task_id} status: {task['status']}")
+        
         if task["status"] not in ["active", "processing"]:
+            if DEBUG:
+                logger.debug(f"Task {task_id} has invalid status: {task['status']}")
             raise ValueError(f"Task {task_id} is not active or processing (status: {task['status']})")
             
         # Verify lock (Fencing Token)
         if worker_id:
             metadata = task.get("metadata") or {}
             locked_by = metadata.get("locked_by")
+            if DEBUG:
+                logger.debug(f"Task {task_id} lock check: locked_by={locked_by}, worker_id={worker_id}")
             if locked_by and locked_by != worker_id:
+                if DEBUG:
+                    logger.debug(f"Lock mismatch for task {task_id}")
                 raise ValueError(f"Lock mismatch: Task claimed by {locked_by}, but acknowledged by {worker_id}")
         
         executed_at = int(time.time())
+        
+        if DEBUG:
+            logger.debug(f"Recording execution for task {task_id}")
         
         # Record execution
         await self.db.record_execution(
@@ -213,16 +230,31 @@ class Scheduler:
         
         # Remove from current time bucket
         if task["next_execution"]:
+            if DEBUG:
+                logger.debug(f"Removing task {task_id} from time bucket {task['next_execution']}")
             await self.db.remove_from_time_bucket(task["next_execution"], task_id)
         
         # Calculate next execution
         schedule_config = task["schedule_config"]
-        next_execution = self.time_parser.calculate_next_execution(
-            schedule_config,
-            executed_at
-        )
+        if DEBUG:
+            logger.debug(f"Calculating next execution for task {task_id} with config: {schedule_config}")
+        
+        try:
+            next_execution = self.time_parser.calculate_next_execution(
+                schedule_config,
+                executed_at
+            )
+            if DEBUG:
+                logger.debug(f"Next execution calculated: {next_execution}")
+        except Exception as e:
+            if DEBUG:
+                logger.debug(f"Error calculating next execution: {str(e)}", exc_info=True)
+            raise
         
         if next_execution:
+            if DEBUG:
+                logger.debug(f"Updating task {task_id} with next_execution={next_execution}")
+            
             # Update task with next execution
             await self.db.update_task(task_id, {
                 "next_execution": next_execution,
@@ -232,6 +264,8 @@ class Scheduler:
             # Update execution count if recurring
             if "repeat" in schedule_config:
                 repeat = schedule_config["repeat"]
+                if DEBUG:
+                    logger.debug(f"Updating execution count for recurring task {task_id}. Repeat config: {repeat}")
                 if "execution_count" in repeat:
                     repeat["execution_count"] = repeat.get("execution_count", 0) + 1
                     await self.db.update_task(task_id, {
@@ -239,12 +273,19 @@ class Scheduler:
                     })
             
             # Add to new time bucket
+            if DEBUG:
+                logger.debug(f"Adding task {task_id} to time bucket {next_execution}")
             await self.db.add_to_time_bucket(next_execution, task_id)
             
             # Return ISO format
-            return datetime.utcfromtimestamp(next_execution).isoformat() + "Z"
+            next_execution_iso = datetime.utcfromtimestamp(next_execution).isoformat() + "Z"
+            if DEBUG:
+                logger.debug(f"Task {task_id} acknowledged. Next execution: {next_execution_iso}")
+            return next_execution_iso
         else:
             # No more executions - mark as completed
+            if DEBUG:
+                logger.debug(f"Task {task_id} has no more executions. Marking as completed.")
             await self.db.update_task(task_id, {"status": "completed"})
             return None
     

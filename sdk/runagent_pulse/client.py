@@ -173,7 +173,101 @@ class PulseClient:
         data = response.json()
         return data.get("next_execution")
     
-    # ... (get_task, update_task, delete_task, list_tasks, get_task_history, on_trigger, start_polling methods remain same) ...
+    def get_task(self, task_id: str) -> Dict[str, Any]:
+        """Get task details"""
+        response = requests.get(
+            f"{self.server_url}/tasks/{task_id}",
+            headers=self.headers
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    def update_task(self, task_id: str, updates: dict):
+        """Update task (pause, resume, modify)"""
+        response = requests.patch(
+            f"{self.server_url}/tasks/{task_id}",
+            headers=self.headers,
+            json=updates
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    def delete_task(self, task_id: str):
+        """Cancel/delete task"""
+        response = requests.delete(
+            f"{self.server_url}/tasks/{task_id}",
+            headers=self.headers
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    def list_tasks(self, status: Optional[str] = None, schedule_type: Optional[str] = None,
+                   start_time: Optional[int] = None, end_time: Optional[int] = None,
+                   limit: int = 100, offset: int = 0) -> Dict[str, Any]:
+        """List tasks with filters"""
+        params = {"limit": limit, "offset": offset}
+        if status:
+            params["status"] = status
+        if schedule_type:
+            params["schedule_type"] = schedule_type
+        if start_time:
+            params["start_time"] = start_time
+        if end_time:
+            params["end_time"] = end_time
+        
+        response = requests.get(
+            f"{self.server_url}/tasks",
+            headers=self.headers,
+            params=params
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    def get_task_history(self, task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get execution history for a task"""
+        response = requests.get(
+            f"{self.server_url}/tasks/{task_id}/history",
+            headers=self.headers,
+            params={"limit": limit}
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("history", [])
+    
+    def on_trigger(self, schedule_type: str):
+        """Register callback for schedule type"""
+        def decorator(func: Callable):
+            if schedule_type not in self.callbacks:
+                self.callbacks[schedule_type] = []
+            self.callbacks[schedule_type].append(func)
+            return func
+        return decorator
+    
+    def start_polling(self, schedule_types: Optional[List[str]] = None, poll_interval: int = 5):
+        """
+        Start polling for tasks
+        
+        Args:
+            schedule_types: Optional list of schedule types to poll for.
+                          If None, automatically uses all registered trigger types.
+            poll_interval: Seconds between polls (default: 5)
+        """
+        if self.polling:
+            return
+        
+        # If no schedule types specified, use all registered trigger types
+        if schedule_types is None:
+            schedule_types = list(self.callbacks.keys())
+            if not schedule_types:
+                raise ValueError("No schedule types to poll. Register triggers with @client.on_trigger() first, or pass schedule_types explicitly.")
+        
+        self.polling = True
+        self.poll_thread = threading.Thread(
+            target=self._poll_loop,
+            args=(poll_interval, schedule_types),
+            daemon=True
+        )
+        self.poll_thread.start()
 
     def _poll_loop(self, poll_interval: int, schedule_types: List[str]):
         """Internal polling loop with exponential backoff"""

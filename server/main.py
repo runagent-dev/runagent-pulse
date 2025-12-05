@@ -263,6 +263,9 @@ async def acknowledge_task(
     _: bool = Depends(verify_api_key)
 ):
     """Acknowledge task execution"""
+    if DEBUG:
+        logger.debug(f"Acknowledge request: task_id={task_id}, status={request.status}, worker_id={request.worker_id}, execution_time_ms={request.execution_time_ms}, error={request.error}")
+    
     try:
         next_execution = await scheduler.acknowledge_task(
             task_id=task_id,
@@ -272,13 +275,21 @@ async def acknowledge_task(
             worker_id=request.worker_id
         )
         
+        if DEBUG:
+            logger.debug(f"Task {task_id} acknowledged successfully. Next execution: {next_execution}")
+        
         return AckResponse(next_execution=next_execution)
     except ValueError as e:
         # Check if it's a fencing token error (lock mismatch)
         if "Lock mismatch" in str(e):
-             raise HTTPException(status_code=409, detail=str(e))
+            if DEBUG:
+                logger.debug(f"Lock mismatch for task {task_id}: {str(e)}")
+            raise HTTPException(status_code=409, detail=str(e))
+        if DEBUG:
+            logger.debug(f"ValueError for task {task_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        logger.error(f"Internal error acknowledging task {task_id}: {str(e)}", exc_info=DEBUG)
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 @app.get("/tasks/{task_id}")
