@@ -82,3 +82,4 @@ def test_calculate_next_execution():
     assert next_exec is not None
     assert next_exec > current_time
 
+

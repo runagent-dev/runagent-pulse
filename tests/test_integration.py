@@ -103,3 +103,4 @@ async def test_recurring_workflow(scheduler):
     history = await scheduler.db.get_execution_history(task_id)
     assert len(history) >= 2
 
+

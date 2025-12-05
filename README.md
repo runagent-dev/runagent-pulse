@@ -123,3 +123,4 @@ Pulse uses a "claim" pattern for robust execution:
 
 This ensures that even if multiple workers see the same task, only one will execute it.
 
+

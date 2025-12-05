@@ -25,3 +25,4 @@ print(f"Next execution: {details['next_execution_iso']}")
 # Cancel the task
 # task.cancel()
 
+

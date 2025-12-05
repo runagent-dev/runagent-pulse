@@ -129,3 +129,4 @@ async def test_restore_state(scheduler):
     task = await scheduler.db.get_task(task_id)
     assert task["status"] == "active"
 
+
