@@ -21,7 +21,7 @@ def main():
     
     # Schedule a one-time task
     schedule_type = "test_task_v2"
-    when = "in 90 seconds"  # Natural language or ISO 8601
+    when = "in 60 seconds"  # Natural language or ISO 8601
     
     print(f"\n📅 Scheduling one-time task:")
     print(f"   Type: {schedule_type}")

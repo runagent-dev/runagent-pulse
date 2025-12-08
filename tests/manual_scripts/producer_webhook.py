@@ -25,7 +25,7 @@ def main():
     client = PulseClient(server_url=server_url)
 
     schedule_type = "webhook_task"
-    when = "in 100 seconds"
+    when = "in 30 seconds"
 
     print("\n🚀 Scheduling webhook task:")
     print(f"   Type: {schedule_type}")

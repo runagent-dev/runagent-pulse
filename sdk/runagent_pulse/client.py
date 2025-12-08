@@ -2,6 +2,8 @@
 RunAgent Pulse Client
 Python SDK for interacting with RunAgent Pulse server
 """
+import logging
+import os
 import requests
 import time
 import threading
@@ -55,6 +57,30 @@ class PulseClient:
         if api_key:
             self.headers["Authorization"] = f"Bearer {api_key}"
         self.headers["Content-Type"] = "application/json"
+
+        # Lightweight debug switch (set RUNAGENT_PULSE_DEBUG=1)
+        self._debug = os.getenv("RUNAGENT_PULSE_DEBUG", "").lower() in (
+            "1", "true", "yes", "on", "debug"
+        )
+        self.logger = logging.getLogger("runagent_pulse.client")
+        if self._debug:
+            if not self.logger.handlers:
+                handler = logging.StreamHandler()
+                formatter = logging.Formatter(
+                    "[%(asctime)s] %(name)s %(levelname)s: %(message)s"
+                )
+                handler.setFormatter(formatter)
+                self.logger.addHandler(handler)
+            self.logger.setLevel(logging.DEBUG)
+            redacted_headers = {
+                k: v for k, v in self.headers.items()
+                if k.lower() != "authorization"
+            }
+            self.logger.debug(
+                "RUNAGENT_PULSE_DEBUG enabled; server=%s headers=%s",
+                self.server_url,
+                redacted_headers,
+            )
         
         self.time_parser = TimeParser()
         self.callbacks: Dict[str, List[tuple[Callable, bool]]] = {}
@@ -265,11 +291,31 @@ class PulseClient:
         """
         Call a catalog-exposed tool over HTTP.
         """
+        if self._debug:
+            redacted_headers = {
+                k: v for k, v in self.headers.items()
+                if k.lower() != "authorization"
+            }
+            self.logger.debug(
+                "Calling tool '%s' -> %s/tools/%s | payload=%s | headers=%s",
+                name,
+                self.server_url,
+                name,
+                kwargs,
+                redacted_headers,
+            )
         response = requests.post(
             f"{self.server_url}/tools/{name}",
             headers=self.headers,
             json=kwargs,
         )
+        if self._debug:
+            self.logger.debug(
+                "Tool '%s' response status=%s body=%s",
+                name,
+                response.status_code,
+                response.text,
+            )
         response.raise_for_status()
         return response.json()
     

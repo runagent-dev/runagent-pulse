@@ -3,6 +3,7 @@ Service layer for task operations shared by FastAPI endpoints and MCP tools.
 """
 from typing import Dict, Any
 from fastapi import HTTPException
+from dateutil import parser as date_parser
 from runagent_pulse.models import (
     ScheduleTaskParams,
     ListTasksParams,
@@ -19,9 +20,22 @@ class TaskService:
         self.scheduler = scheduler
 
     async def schedule(self, params) -> Dict[str, Any]:
+        # Normalize string inputs (tools send "when" as str) to the scheduler's dict format
+        when = params.when
+        if isinstance(when, str):
+            try:
+                # ISO-ish datetime strings
+                date_parser.parse(when)
+                when = {"type": "once", "time": when}
+            except Exception:
+                # Natural language fall-back
+                when = {"type": "once", "natural": when}
+        elif not isinstance(when, dict):
+            raise ValueError(f"Invalid 'when' format: {when}")
+
         task_id = await self.scheduler.schedule_task(
             schedule_type=params.schedule_type,
-            when=params.when,
+            when=when,
             payload=params.payload,
             repeat=params.repeat,
             metadata=params.metadata,

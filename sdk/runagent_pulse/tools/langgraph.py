@@ -3,6 +3,7 @@ LangGraph tools for RunAgent Pulse using the shared catalog.
 """
 from typing import List, ClassVar, Type
 import json
+import logging
 
 try:
     from langchain_core.tools import BaseTool as LangChainTool
@@ -19,6 +20,18 @@ def _create_langgraph_tool(meta, client):
     if not LANGCHAIN_AVAILABLE:
         raise ImportError("LangChain is not installed")
 
+    logger = logging.getLogger("runagent_pulse.langgraph")
+    debug_enabled = getattr(client, "_debug", False)
+    if debug_enabled:
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                "[%(asctime)s] %(name)s %(levelname)s: %(message)s"
+            )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
     class GeneratedTool(LangChainTool):
         name: str = meta.name
         description: str = meta.description
@@ -26,7 +39,15 @@ def _create_langgraph_tool(meta, client):
 
         def _run(self, **kwargs) -> str:
             try:
+                if debug_enabled:
+                    logger.debug(
+                        "LangGraph tool '%s' invoked with kwargs=%s", meta.name, kwargs
+                    )
                 result = client.call_tool(meta.name, **kwargs)
+                if debug_enabled:
+                    logger.debug(
+                        "LangGraph tool '%s' result=%s", meta.name, result
+                    )
                 return json.dumps(result)
             except Exception as exc:  # pragma: no cover - network errors, etc.
                 return json.dumps({"error": str(exc)})
