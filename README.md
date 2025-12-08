@@ -125,4 +125,11 @@ Pulse uses a "claim" pattern for robust execution:
 
 This ensures that even if multiple workers see the same task, only one will execute it.
 
+### Server layout
+- Configuration is centralized in `server/settings.py` and injected via `app.state` in the FastAPI app factory (`server/main.py`).
+- HTTP routes are organized under `server/api/*` and share dependencies through `server/dependencies.py`.
+- Background expiration and webhook processing live in `server/workers.py`, started/stopped inside the FastAPI lifespan.
+- The MCP endpoint is mounted from `server/mcp_tools.py` using a per-app tool registry instance.
+- Catalog-driven tool endpoints live under `/tools/{name}` (from `server/api/tools.py`) and publish metadata at `/meta/tools` for discovery across HTTP, MCP, and framework adapters.
+
 

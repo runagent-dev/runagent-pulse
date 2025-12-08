@@ -28,4 +28,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "sdk"}
-packages = ["runagent_pulse"]
+packages = [
+    "runagent_pulse",
+    "runagent_pulse.common",
+    "runagent_pulse.tools",
+]

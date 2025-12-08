@@ -9,7 +9,13 @@ from typing import Optional, Dict, List, Callable, Any
 from datetime import datetime
 import json
 
-from runagent_pulse.time_parser import TimeParser
+from runagent_pulse.time import TimeParser
+from runagent_pulse.contracts import (
+    ScheduleTaskResponse,
+    ListTasksResponse,
+    CancelTaskResponse,
+    GetTaskDetailsResponse,
+)
 
 class PulseTask:
     """Wrapper for a scheduled task"""
@@ -254,6 +260,18 @@ class PulseClient:
         response.raise_for_status()
         data = response.json()
         return data.get("history", [])
+
+    def call_tool(self, name: str, **kwargs) -> Dict[str, Any]:
+        """
+        Call a catalog-exposed tool over HTTP.
+        """
+        response = requests.post(
+            f"{self.server_url}/tools/{name}",
+            headers=self.headers,
+            json=kwargs,
+        )
+        response.raise_for_status()
+        return response.json()
     
     def on_trigger(self, schedule_type: str, allow_extra: bool = False):
         """
