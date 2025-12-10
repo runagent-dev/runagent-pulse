@@ -1,5 +1,5 @@
 """Helper for constructing tool context."""
-from server.tool_catalog import ToolContext
+from server.tools.catalog import ToolContext
 from server.services import TaskService
 from server.database import Database
 from server.scheduler import Scheduler

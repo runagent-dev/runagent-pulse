@@ -286,6 +286,89 @@ class PulseClient:
         response.raise_for_status()
         data = response.json()
         return data.get("history", [])
+    
+    def schedule_agent(
+        self,
+        agent_id: str,
+        entrypoint_tag: str,
+        when: Any,
+        params: Dict[str, Any],
+        callback_url: Optional[str] = None,
+        user_id: Optional[str] = None,
+        persistent_memory: bool = False,
+        executor_type: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> PulseTask:
+        """
+        Schedule agent execution
+        
+        Args:
+            agent_id: Agent ID (for serverless) or module name (for local)
+            entrypoint_tag: Agent entrypoint to execute
+            when: When to execute ("in 5 minutes", "tomorrow at 9am", "now", cron)
+            params: Parameters to pass to agent (dict that matches agent function args)
+            callback_url: Optional webhook URL to POST result to
+            user_id: Optional user ID for persistent memory
+            persistent_memory: Enable persistent memory for agent
+            executor_type: Executor type ("serverless", "local", or None for auto)
+            metadata: Optional metadata
+            
+        Returns:
+            PulseTask instance
+        """
+        payload = {
+            "agent_id": agent_id,
+            "entrypoint_tag": entrypoint_tag,
+            "params": params,
+            "user_id": user_id,
+            "persistent_memory": persistent_memory,
+        }
+        
+        # Add executor_type to payload if specified
+        if executor_type:
+            payload["executor_type"] = executor_type
+        
+        # Merge metadata if provided
+        if metadata:
+            payload_metadata = metadata.copy()
+        else:
+            payload_metadata = {}
+        
+        # Store executor_type in metadata as well for backward compatibility
+        if executor_type:
+            payload_metadata["executor_type"] = executor_type
+        
+        # Store callback_url in metadata for the worker to use
+        if callback_url:
+            payload_metadata["callback_url"] = callback_url
+        
+        return self.schedule(
+            schedule_type="run_agent",
+            when=when,
+            payload=payload,
+            metadata=payload_metadata,
+            webhook_url=callback_url,  # Also set webhook_url for webhook worker compatibility
+        )
+    
+    def get_task_result(self, task_id: str) -> Dict[str, Any]:
+        """
+        Get result for a task
+        
+        Args:
+            task_id: Task ID
+            
+        Returns:
+            Dict with status and result:
+            - {"status": "pending"} if not yet executed
+            - {"status": "completed", "result": {...}} when done
+            - {"status": "failed", "error": "..."} if failed
+        """
+        response = requests.get(
+            f"{self.server_url}/tasks/{task_id}/result",
+            headers=self.headers
+        )
+        response.raise_for_status()
+        return response.json()
 
     def call_tool(self, name: str, **kwargs) -> Dict[str, Any]:
         """

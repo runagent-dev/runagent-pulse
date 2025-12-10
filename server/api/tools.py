@@ -10,8 +10,7 @@ from server.dependencies import (
     get_settings,
     verify_api_key,
 )
-from server.tool_catalog import list_tools_for
-from server.tool_context import build_tool_context
+from server.tools import list_tools_for, build_tool_context
 
 
 router = APIRouter(prefix="/tools", tags=["tools"])

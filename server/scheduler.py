@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from server.database import Database
-from server.time_parser import TimeParser
+from runagent_pulse.time import TimeParser
 
 DEBUG = os.getenv("PULSE_DEBUG", "false").lower() == "true"
 logger = logging.getLogger("runagent_pulse.scheduler")

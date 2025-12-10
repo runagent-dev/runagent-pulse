@@ -1,5 +1,5 @@
 """Centralized application settings loaded from environment."""
-from typing import List
+from typing import List, Optional
 import logging
 
 from pydantic import Field
@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     host: str = Field("0.0.0.0", env="PULSE_HOST")
     port: int = Field(8000, env="PULSE_PORT")
     cors_allow_origins: List[str] = Field(default_factory=lambda: ["*"], env="PULSE_CORS_ORIGINS")
+    enable_serverless_integration: bool = Field(True, env="ENABLE_SERVERLESS_INTEGRATION")
+    runagent_serverless_api_key: Optional[str] = Field(None, env="RUNAGENT_SERVERLESS_API_KEY")
+    local_agent_path: Optional[str] = Field(None, env="LOCAL_AGENT_PATH")
+    default_executor: str = Field("auto", env="DEFAULT_EXECUTOR")  # "auto", "serverless", or "local"
 
     @property
     def log_level(self) -> int:

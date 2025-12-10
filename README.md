@@ -10,6 +10,7 @@ RunAgent Pulse is a lightweight, self-hosted scheduling service designed for AI 
 - **Local-First**: Runs as a single Docker container with SQLite persistence.
 - **Robust Execution**: "Claim" mechanism prevents duplicate execution in multi-worker environments.
 - **Efficient Polling**: Smart caching and long-polling support.
+- **RunAgent Serverless Integration**: Schedule and execute agents deployed on RunAgent Serverless with callback-based results.
 
 ## Installation
 
@@ -21,13 +22,34 @@ RunAgent Pulse is a lightweight, self-hosted scheduling service designed for AI 
    version: '3.8'
    services:
      pulse:
-       image: runagent/pulse:latest
+       build: .
+       container_name: runagent-pulse
        ports:
          - "8000:8000"
        volumes:
-         - ./data:/app/data
+         - ./pulse-data:/app/data
        environment:
-         - PULSE_API_KEY=your_secret_key
+         - PULSE_API_KEY=${PULSE_API_KEY:-}
+         - ENABLE_SERVERLESS_INTEGRATION=true
+         - RUNAGENT_SERVERLESS_API_KEY=${RUNAGENT_SERVERLESS_API_KEY:-}
+       networks:
+         - runagent-network
+     
+     webhook-handler:
+       build: ./webhook-handler
+       container_name: runagent-webhook-handler
+       ports:
+         - "3001:3001"
+       volumes:
+         - ./webhook-results:/app/results
+       networks:
+         - runagent-network
+       depends_on:
+         - pulse
+   
+   networks:
+     runagent-network:
+       driver: bridge
    ```
 
    Run: `docker-compose up -d`
@@ -101,6 +123,34 @@ while True:
     time.sleep(1)
 ```
 
+#### Scheduling Agent Executions
+
+Pulse can schedule and execute agents deployed on RunAgent Serverless:
+
+```python
+# Schedule with callback
+task = client.schedule_agent(
+    agent_id="your-agent-id",
+    entrypoint_tag="your-entrypoint",
+    when="in 5 minutes",
+    params={"prompt": "Hello, world!"},
+    callback_url="http://webhook-handler:3001/results"
+)
+
+# Or poll for results
+task = client.schedule_agent(
+    agent_id="your-agent-id",
+    entrypoint_tag="your-entrypoint",
+    when="now",
+    params={"prompt": "Hello"}
+)
+
+# Poll for result
+result = client.get_task_result(task.task_id)
+```
+
+See [Agent Scheduling Guide](docs/AGENT_SCHEDULING.md) for detailed documentation.
+
 ### API Reference
 
 #### `POST /tasks/schedule`
@@ -115,6 +165,9 @@ Claim a task for execution (handled automatically by SDK).
 #### `POST /tasks/{task_id}/ack`
 Acknowledge task execution.
 
+#### `GET /tasks/{task_id}/result`
+Get execution result for a task (for agent executions).
+
 ## Architecture
 
 Pulse uses a "claim" pattern for robust execution:
@@ -128,8 +181,86 @@ This ensures that even if multiple workers see the same task, only one will exec
 ### Server layout
 - Configuration is centralized in `server/settings.py` and injected via `app.state` in the FastAPI app factory (`server/main.py`).
 - HTTP routes are organized under `server/api/*` and share dependencies through `server/dependencies.py`.
-- Background expiration and webhook processing live in `server/workers.py`, started/stopped inside the FastAPI lifespan.
-- The MCP endpoint is mounted from `server/mcp_tools.py` using a per-app tool registry instance.
+- Background workers live in `server/workers/` and are started/stopped inside the FastAPI lifespan.
+- Agent executors are modularized in `server/executors/` (serverless, local, etc.).
+- Tool catalog and context management are in `server/tools/`.
+- MCP server is in `server/mcp/` and mounted at `/mcp`.
 - Catalog-driven tool endpoints live under `/tools/{name}` (from `server/api/tools.py`) and publish metadata at `/meta/tools` for discovery across HTTP, MCP, and framework adapters.
+
+## Agent Scheduling
+
+RunAgent Pulse can schedule and execute agents using modular executors:
+
+- **Serverless Executor**: Execute agents via RunAgent Serverless (default)
+- **Local Executor**: Execute agents locally without RunAgent Serverless
+
+The system supports:
+
+- **Callback Mode**: Results are automatically POSTed to a webhook URL
+- **Polling Mode**: Results are stored and can be retrieved via API
+
+### Quick Start
+
+1. **Start services**:
+   ```bash
+   docker-compose up -d
+   ```
+
+2. **Schedule an agent**:
+   
+   **Serverless (default)**:
+   ```python
+   from runagent_pulse import PulseClient
+   
+   pulse = PulseClient(server_url="http://localhost:8000")
+   task = pulse.schedule_agent(
+       agent_id="your-agent-id",
+       entrypoint_tag="your-entrypoint",
+       when="in 2 minutes",
+       params={"prompt": "Hello"},
+       executor_type="serverless",  # or None for auto
+       callback_url="http://webhook-handler:3001/results"
+   )
+   ```
+   
+   **Local**:
+   ```python
+   task = pulse.schedule_agent(
+       agent_id="my_agent_module",  # Python module name
+       entrypoint_tag="process",
+       when="now",
+       params={"input": "Hello"},
+       executor_type="local"
+   )
+   ```
+
+3. **Check results**:
+   ```bash
+   # View webhook handler logs
+   docker logs -f runagent-webhook-handler
+   
+   # Or view result files
+   cat ./webhook-results/{task_id}.json
+   ```
+
+See [docs/AGENT_SCHEDULING.md](docs/AGENT_SCHEDULING.md) for complete documentation.
+
+### Environment Variables
+
+```bash
+# .env file
+PULSE_API_KEY=optional-api-key
+PULSE_DEBUG=true
+
+# Serverless executor (optional)
+ENABLE_SERVERLESS_INTEGRATION=true
+RUNAGENT_SERVERLESS_API_KEY=your-serverless-api-key
+
+# Local executor (optional)
+LOCAL_AGENT_PATH=/path/to/agents
+
+# Default executor
+DEFAULT_EXECUTOR=auto  # "auto", "serverless", or "local"
+```
 
 

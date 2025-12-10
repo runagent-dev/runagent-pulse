@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends
 
 from server.dependencies import verify_api_key
-from server.tool_catalog import list_tools
+from server.tools import list_tools
 
 router = APIRouter(prefix="/meta", tags=["meta"])
 

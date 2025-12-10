@@ -270,3 +270,41 @@ async def get_task_history(
     history = await db.get_execution_history(task_id, limit=limit)
     return {"history": history}
 
+
+@router.get("/{task_id}/result", dependencies=[Depends(verify_api_key)])
+async def get_task_result(
+    task_id: str,
+    db: Database = Depends(get_db),
+    task_service: TaskService = Depends(get_task_service),
+):
+    """Get execution result for a task."""
+    # Check if task exists
+    task = await task_service.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Try to get result
+    result = await db.get_execution_result(task_id)
+    
+    if result:
+        return {
+            "status": "completed",
+            "result": result["result"],
+            "execution_id": result["execution_id"],
+            "stored_at": result["stored_at"],
+        }
+    
+    # Check if task has been executed but no result stored yet
+    # (might be in progress or failed before result storage)
+    history = await db.get_execution_history(task_id, limit=1)
+    if history and len(history) > 0:
+        hist_item = history[0]
+        if hist_item.get("status") in ["success", "failed"]:
+            return {
+                "status": hist_item["status"],
+                "error": hist_item.get("error"),
+            }
+    
+    # Task not yet executed
+    return {"status": "pending"}
+
