@@ -271,19 +271,85 @@ async def get_task_history(
     return {"history": history}
 
 
-@router.get("/{task_id}/result", dependencies=[Depends(verify_api_key)])
-async def get_task_result(
+@router.get("/{task_id}/results", dependencies=[Depends(verify_api_key)])
+async def get_all_task_results(
     task_id: str,
     db: Database = Depends(get_db),
     task_service: TaskService = Depends(get_task_service),
 ):
-    """Get execution result for a task."""
+    """Get all execution results for a task, including results from database and execution history."""
     # Check if task exists
     task = await task_service.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    # Try to get result
+    # Get execution history
+    history = await db.get_execution_history(task_id, limit=1000)
+    
+    # Get results for each execution
+    results = []
+    for exec_item in history:
+        execution_id = exec_item.get("execution_id")
+        result_data = {
+            "execution_id": execution_id,
+            "executed_at": exec_item.get("executed_at"),
+            "executed_at_iso": exec_item.get("executed_at_iso"),
+            "status": exec_item.get("status"),
+            "execution_time_ms": exec_item.get("execution_time_ms"),
+            "error": exec_item.get("error"),
+        }
+        
+        # Try to get stored result
+        if execution_id:
+            result = await db.get_execution_result_by_execution_id(execution_id)
+            if result:
+                result_data["result"] = result.get("result")
+                result_data["stored_at"] = result.get("stored_at")
+        
+        results.append(result_data)
+    
+    return {
+        "task_id": task_id,
+        "total_executions": len(results),
+        "executions": results
+    }
+
+
+@router.get("/{task_id}/result", dependencies=[Depends(verify_api_key)])
+async def get_task_result(
+    task_id: str,
+    execution_id: Optional[str] = Query(None),
+    db: Database = Depends(get_db),
+    task_service: TaskService = Depends(get_task_service),
+):
+    """Get execution result for a task. If execution_id is provided, returns result for that specific execution."""
+    # Check if task exists
+    task = await task_service.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # If execution_id is provided, get result for that specific execution
+    if execution_id:
+        result = await db.get_execution_result_by_execution_id(execution_id)
+        if result:
+            return {
+                "status": "completed",
+                "result": result["result"],
+                "execution_id": result["execution_id"],
+                "stored_at": result["stored_at"],
+            }
+        # Check execution history for this execution_id
+        history = await db.get_execution_history(task_id, limit=1000)
+        for hist_item in history:
+            if hist_item.get("execution_id") == execution_id:
+                return {
+                    "status": hist_item.get("status", "unknown"),
+                    "error": hist_item.get("error"),
+                    "execution_time_ms": hist_item.get("execution_time_ms"),
+                }
+        return {"status": "not_found"}
+    
+    # Try to get most recent result
     result = await db.get_execution_result(task_id)
     
     if result:

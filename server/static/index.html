@@ -231,11 +231,49 @@
                     completed: document.getElementById('filter-completed').checked
                 };
 
-                const events = data.tasks
+                const events = [];
+                const recurringTasks = [];
+                
+                // First pass: collect recurring tasks and their history
+                for (const task of data.tasks.filter(t => filters[t.status] || (t.status === 'completed' && filters.completed))) {
+                    const scheduleConfig = task.schedule_config || {};
+                    const repeat = scheduleConfig.repeat || {};
+                    const isRecurring = scheduleConfig.when?.type === 'recurring' || (repeat.interval && repeat.interval !== null);
+                    
+                    if (isRecurring && repeat.interval) {
+                        recurringTasks.push(task);
+                    }
+                }
+                
+                // Fetch history for all recurring tasks in parallel
+                const historyPromises = recurringTasks.map(async (task) => {
+                    try {
+                        const historyResponse = await fetch(`/tasks/${task.id}/history?limit=100`);
+                        if (historyResponse.ok) {
+                            const historyData = await historyResponse.json();
+                            return { task, history: historyData.history || [] };
+                        }
+                    } catch (e) {
+                        console.error('Error fetching history:', e);
+                    }
+                    return { task, history: [] };
+                });
+                
+                const taskHistories = await Promise.all(historyPromises);
+                const historyMap = new Map();
+                taskHistories.forEach(({ task, history }) => {
+                    historyMap.set(task.id, history);
+                });
+                
+                // Second pass: create events
+                data.tasks
                     .filter(task => filters[task.status] || (task.status === 'completed' && filters.completed))
-                    .map(task => {
+                    .forEach(task => {
                         const isWebhook = task.metadata?.is_webhook === true;
-
+                        const scheduleConfig = task.schedule_config || {};
+                        const repeat = scheduleConfig.repeat || {};
+                        const isRecurring = scheduleConfig.when?.type === 'recurring' || (repeat.interval && repeat.interval !== null);
+                        
                         let color = '#06b6d4'; // Cyan (active)
                         if (task.status === 'processing') color = '#EAB308'; // Yellow
                         if (task.status === 'completed') color = '#22C55E'; // Green
@@ -246,14 +284,67 @@
                             color = '#EF4444'; // Red (Zombie)
                         }
 
-                        return {
-                            id: task.id,
-                            title: `${task.schedule_type} (${task.status})${isWebhook ? ' [webhook]' : ''}`,
-                            start: task.next_execution_iso || new Date(task.created_at * 1000).toISOString(),
-                            backgroundColor: color,
-                            borderColor: color,
-                            extendedProps: task
-                        };
+                        // If recurring, show each execution as separate card
+                        if (isRecurring && repeat.interval) {
+                            const executionCount = repeat.execution_count || 0;
+                            const times = repeat.times; // null = infinite
+                            const intervalSeconds = parseInterval(repeat.interval);
+                            const executionHistory = historyMap.get(task.id) || [];
+                            
+                            if (intervalSeconds > 0 && task.next_execution_iso) {
+                                const firstExecution = new Date(task.next_execution_iso).getTime() / 1000;
+                                const remaining = times ? times - executionCount : null;
+                                const maxExecutions = remaining ? Math.min(remaining, 20) : 20;
+                                
+                                // Show future executions
+                                for (let i = 0; i < maxExecutions; i++) {
+                                    const executionTime = firstExecution + (i * intervalSeconds);
+                                    
+                                    // Only show executions within the calendar view range
+                                    if (executionTime >= start && executionTime <= end) {
+                                        const executionNumber = executionCount + i + 1;
+                                        const totalText = times ? `/${times}` : '';
+                                        
+                                        events.push({
+                                            id: `${task.id}-exec-${executionNumber}`,
+                                            title: `${task.schedule_type} #${executionNumber}${totalText}${isWebhook ? ' [webhook]' : ''}`,
+                                            start: new Date(executionTime * 1000).toISOString(),
+                                            backgroundColor: color,
+                                            borderColor: color,
+                                            extendedProps: {
+                                                ...task,
+                                                execution_number: executionNumber,
+                                                total_executions: times,
+                                                is_future_execution: true
+                                            }
+                                        });
+                                    }
+                                }
+                                
+                                // Don't show completed executions - they disappear after completion
+                                // Only show future/pending executions
+                            } else {
+                                // Fallback to single event if interval parsing fails
+                                events.push({
+                                    id: task.id,
+                                    title: `${task.schedule_type} (${task.status})${isWebhook ? ' [webhook]' : ''}`,
+                                    start: task.next_execution_iso || new Date(task.created_at * 1000).toISOString(),
+                                    backgroundColor: color,
+                                    borderColor: color,
+                                    extendedProps: task
+                                });
+                            }
+                        } else {
+                            // Non-recurring or completed task - show single event
+                            events.push({
+                                id: task.id,
+                                title: `${task.schedule_type} (${task.status})${isWebhook ? ' [webhook]' : ''}`,
+                                start: task.next_execution_iso || new Date(task.created_at * 1000).toISOString(),
+                                backgroundColor: color,
+                                borderColor: color,
+                                extendedProps: task
+                            });
+                        }
                     });
                 
                 successCallback(events);
@@ -262,8 +353,27 @@
                 failureCallback(error);
             }
         }
+        
+        function parseInterval(interval) {
+            // Parse interval string like "30s", "5m", "1h", "2d" to seconds
+            if (!interval) return 0;
+            
+            const match = interval.match(/^(\d+)([smhd])$/);
+            if (!match) return 0;
+            
+            const value = parseInt(match[1]);
+            const unit = match[2];
+            
+            switch(unit) {
+                case 's': return value;
+                case 'm': return value * 60;
+                case 'h': return value * 3600;
+                case 'd': return value * 86400;
+                default: return 0;
+            }
+        }
 
-        function showTaskDetails(task) {
+        async function showTaskDetails(task) {
             currentTask = task;
             const modal = document.getElementById('task-modal');
             const title = document.getElementById('modal-title');
@@ -297,6 +407,34 @@
             const webhookRetries = task.metadata?.webhook_retries;
             const webhookAttempts = task.metadata?.webhook_attempts;
 
+            // Fetch execution history and results
+            let executionHistory = [];
+            let executionResults = {};
+            try {
+                const historyResponse = await fetch(`/tasks/${task.id}/history?limit=100`);
+                if (historyResponse.ok) {
+                    const historyData = await historyResponse.json();
+                    executionHistory = historyData.history || [];
+                    
+                    // Fetch results for each execution
+                    for (const exec of executionHistory) {
+                        if (exec.execution_id) {
+                            try {
+                                const resultResponse = await fetch(`/tasks/${task.id}/result?execution_id=${exec.execution_id}`);
+                                if (resultResponse.ok) {
+                                    const resultData = await resultResponse.json();
+                                    executionResults[exec.execution_id] = resultData;
+                                }
+                            } catch (e) {
+                                console.error('Error fetching result for execution:', e);
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('Error fetching execution history:', e);
+            }
+
             content.innerHTML = `
                 <div class="space-y-4">
                     <div class="flex items-center justify-between">
@@ -324,6 +462,43 @@
                             <span id="countdown-hours">0</span>h 
                             <span id="countdown-minutes">0</span>m 
                             <span id="countdown-seconds">0</span>s
+                        </div>
+                    </div>
+                    ` : ''}
+                    
+                    ${task.schedule_config?.repeat || task.schedule_config?.when?.type === 'recurring' ? `
+                    <div class="bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-4 border-2 border-purple-200">
+                        <p class="text-xs text-gray-600 mb-2 font-medium">Recurring Task Information</p>
+                        <div class="grid grid-cols-2 gap-3">
+                            ${task.execution_number ? `
+                            <div>
+                                <p class="text-xs text-gray-500 mb-1">Execution Number</p>
+                                <p class="font-semibold text-purple-700">${task.execution_number}${task.total_executions ? ` / ${task.total_executions}` : ''}</p>
+                            </div>
+                            ` : ''}
+                            ${task.schedule_config?.repeat?.interval ? `
+                            <div>
+                                <p class="text-xs text-gray-500 mb-1">Interval</p>
+                                <p class="font-semibold text-purple-700">${task.schedule_config.repeat.interval}</p>
+                            </div>
+                            ` : ''}
+                            ${task.schedule_config?.repeat?.execution_count !== undefined ? `
+                            <div>
+                                <p class="text-xs text-gray-500 mb-1">Completed Executions</p>
+                                <p class="font-semibold text-purple-700">${task.schedule_config.repeat.execution_count}</p>
+                            </div>
+                            ` : ''}
+                            ${task.schedule_config?.repeat?.times !== undefined && task.schedule_config?.repeat?.times !== null ? `
+                            <div>
+                                <p class="text-xs text-gray-500 mb-1">Total Executions</p>
+                                <p class="font-semibold text-purple-700">${task.schedule_config.repeat.times}</p>
+                            </div>
+                            ` : `
+                            <div>
+                                <p class="text-xs text-gray-500 mb-1">Total Executions</p>
+                                <p class="font-semibold text-purple-700">∞ (Infinite)</p>
+                            </div>
+                            `}
                         </div>
                     </div>
                     ` : ''}
@@ -358,6 +533,88 @@
                         <pre class="bg-gray-50 rounded-lg p-4 text-sm overflow-x-auto border border-gray-200">${JSON.stringify(task.metadata, null, 2)}</pre>
                     </div>
                     ` : ''}
+                    
+                    ${executionHistory.length > 0 ? `
+                    <div>
+                        <p class="text-sm font-medium text-gray-700 mb-2">Execution History (${executionHistory.length})</p>
+                        <div class="space-y-2 max-h-96 overflow-y-auto">
+                            ${executionHistory.map((exec, idx) => {
+                                const execDate = new Date(exec.executed_at * 1000).toLocaleString();
+                                const result = executionResults[exec.execution_id];
+                                const statusColor = exec.status === 'success' ? 'bg-green-100 text-green-800' : 
+                                                   exec.status === 'failed' ? 'bg-red-100 text-red-800' : 
+                                                   'bg-gray-100 text-gray-800';
+                                return `
+                                <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <div class="flex items-center gap-2">
+                                            <span class="px-2 py-1 rounded text-xs font-medium ${statusColor}">
+                                                ${exec.status || 'pending'}
+                                            </span>
+                                            <span class="text-xs text-gray-500">#${executionHistory.length - idx}</span>
+                                        </div>
+                                        <span class="text-xs text-gray-500">${execDate}</span>
+                                    </div>
+                                    ${exec.execution_time_ms ? `
+                                    <p class="text-xs text-gray-500 mb-1">Execution Time: ${exec.execution_time_ms}ms</p>
+                                    ` : ''}
+                                    ${exec.error ? `
+                                    <p class="text-xs text-red-600 mb-1">Error: ${exec.error}</p>
+                                    ` : ''}
+                                    ${result && result.status === 'completed' && result.result ? `
+                                    <details class="mt-2">
+                                        <summary class="text-xs text-blue-600 cursor-pointer hover:text-blue-800">View Result</summary>
+                                        <pre class="mt-2 bg-white rounded p-2 text-xs overflow-x-auto border border-gray-200">${JSON.stringify(result.result, null, 2)}</pre>
+                                    </details>
+                                    ` : ''}
+                                </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
+                    
+                    ${task.schedule_config?.repeat || task.schedule_config?.when?.type === 'recurring' ? `
+                    <div>
+                        <p class="text-sm font-medium text-gray-700 mb-2">Upcoming Executions</p>
+                        <div class="space-y-2 max-h-64 overflow-y-auto">
+                            ${(() => {
+                                const repeat = task.schedule_config?.repeat || {};
+                                const interval = repeat.interval;
+                                const times = repeat.times;
+                                const executionCount = repeat.execution_count || 0;
+                                const remaining = times ? times - executionCount : null;
+                                
+                                if (!interval || !task.next_execution_iso) return '<p class="text-xs text-gray-500">No upcoming executions</p>';
+                                
+                                const intervalSeconds = parseInterval(interval);
+                                if (intervalSeconds <= 0) return '<p class="text-xs text-gray-500">Invalid interval</p>';
+                                
+                                const firstExecution = new Date(task.next_execution_iso).getTime() / 1000;
+                                const maxShow = remaining ? Math.min(remaining, 10) : 10;
+                                
+                                let html = '';
+                                for (let i = 0; i < maxShow; i++) {
+                                    const executionTime = firstExecution + (i * intervalSeconds);
+                                    const execDate = new Date(executionTime * 1000);
+                                    const execNumber = executionCount + i + 1;
+                                    const totalText = times ? ` / ${times}` : '';
+                                    
+                                    html += `
+                                    <div class="bg-blue-50 rounded-lg p-3 border border-blue-200">
+                                        <div class="flex items-center justify-between">
+                                            <span class="text-sm font-medium text-blue-800">Execution #${execNumber}${totalText}</span>
+                                            <span class="text-xs text-blue-600">${execDate.toLocaleString()}</span>
+                                        </div>
+                                        <p class="text-xs text-blue-500 mt-1">${getTimeUntil(executionTime * 1000)}</p>
+                                    </div>
+                                    `;
+                                }
+                                return html;
+                            })()}
+                        </div>
+                    </div>
+                    ` : ''}
                 </div>
             `;
             
@@ -367,6 +624,23 @@
             if (task.next_execution_iso && task.status !== 'completed' && task.status !== 'cancelled') {
                 startCountdown(task.next_execution_iso);
             }
+        }
+        
+        function getTimeUntil(targetTime) {
+            const now = Date.now();
+            const diff = targetTime - now;
+            
+            if (diff <= 0) return 'Past due';
+            
+            const seconds = Math.floor(diff / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+            
+            if (days > 0) return `in ${days}d ${hours % 24}h`;
+            if (hours > 0) return `in ${hours}h ${minutes % 60}m`;
+            if (minutes > 0) return `in ${minutes}m ${seconds % 60}s`;
+            return `in ${seconds}s`;
         }
         
         function startCountdown(nextExecutionISO) {

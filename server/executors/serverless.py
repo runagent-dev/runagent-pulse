@@ -33,10 +33,11 @@ class ServerlessExecutor(BaseExecutor):
         params: Dict[str, Any],
         user_id: Optional[str] = None,
         persistent_memory: bool = False,
+        local: Optional[bool] = None,
         **kwargs
     ) -> Any:
         """
-        Execute agent via RunAgent Serverless
+        Execute agent via RunAgent Serverless or Local
         
         Args:
             agent_id: Agent ID
@@ -44,6 +45,7 @@ class ServerlessExecutor(BaseExecutor):
             params: Parameters to pass to agent
             user_id: Optional user ID for persistent memory
             persistent_memory: Enable persistent memory
+            local: If True, use RunAgent local execution. If False or None, use serverless.
             
         Returns:
             Execution result
@@ -55,42 +57,58 @@ class ServerlessExecutor(BaseExecutor):
                 "runagent package not installed. Install with: pip install runagent"
             )
         
-        self.logger.info(
-            f"Executing agent via Serverless: agent_id={agent_id}, "
-            f"entrypoint_tag={entrypoint_tag}"
-        )
+        # Determine execution mode
+        use_local = local if local is not None else False
         
-        # Set API key and base URL in environment if provided
+        if use_local:
+            self.logger.info(
+                f"Executing agent via RunAgent Local: agent_id={agent_id}, "
+                f"entrypoint_tag={entrypoint_tag}"
+            )
+        else:
+            self.logger.info(
+                f"Executing agent via RunAgent Serverless: agent_id={agent_id}, "
+                f"entrypoint_tag={entrypoint_tag}"
+            )
+        
+        # Set API key and base URL in environment if provided (only for serverless)
         # RunAgentClient reads from RUNAGENT_API_KEY and RUNAGENT_BASE_URL
         # This MUST be set before creating RunAgentClient, as the SDK reads it during initialization
         import os
         original_api_key = os.environ.get("RUNAGENT_API_KEY")
         original_base_url = os.environ.get("RUNAGENT_BASE_URL")
         
-        if self.api_key:
-            os.environ["RUNAGENT_API_KEY"] = self.api_key
-            self.logger.debug(f"Set RUNAGENT_API_KEY for serverless execution")
-        else:
-            self.logger.warning("No API key provided - serverless execution may fail")
-        
-        # Base URL should already be set in docker-compose.yml, but log it for debugging
-        current_base_url = os.environ.get("RUNAGENT_BASE_URL")
-        if current_base_url:
-            self.logger.info(f"Using RunAgent base URL: {current_base_url}")
-        else:
-            self.logger.warning("No RUNAGENT_BASE_URL set - using default (https://backend.run-agent.ai/)")
+        if not use_local:
+            # Only set API key for serverless execution
+            if self.api_key:
+                os.environ["RUNAGENT_API_KEY"] = self.api_key
+                self.logger.debug(f"Set RUNAGENT_API_KEY for serverless execution")
+            else:
+                self.logger.warning("No API key provided - serverless execution may fail")
+            
+            # Base URL should already be set in docker-compose.yml, but log it for debugging
+            current_base_url = os.environ.get("RUNAGENT_BASE_URL")
+            if current_base_url:
+                self.logger.info(f"Using RunAgent base URL: {current_base_url}")
+            else:
+                self.logger.warning("No RUNAGENT_BASE_URL set - using default (https://backend.run-agent.ai/)")
         
         try:
             client = RunAgentClient(
                 agent_id=agent_id,
                 entrypoint_tag=entrypoint_tag,
-                local=False,  # Always use serverless - this is critical!
+                local=use_local,  # Use the local parameter
                 user_id=user_id,
                 persistent_memory=persistent_memory,
             )
             
-            # Verify that client is configured for serverless (not local)
-            if client.local:
+            # Verify that client is configured correctly
+            if use_local and not client.local:
+                raise ValueError(
+                    "RunAgentClient was initialized in serverless mode, but local mode was requested. "
+                    "Check that local=True is being respected."
+                )
+            elif not use_local and client.local:
                 raise ValueError(
                     "RunAgentClient was initialized in local mode, but serverless mode was requested. "
                     "Check that local=False is being respected."

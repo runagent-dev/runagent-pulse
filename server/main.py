@@ -17,7 +17,7 @@ from server.scheduler import Scheduler
 from server.webhook_executor import WebhookExecutor
 from server.services import TaskService
 from server.mcp import create_mcp_server
-from server.workers import ExpirationWorker, WebhookWorker, AgentExecutorWorker
+from server.workers import ExpirationWorker, WebhookWorker, AgentExecutorWorker, HTTPExecutorWorker
 from server.executors.factory import ExecutorFactory
 from server.api import tasks, health, metrics, dashboard, tools, meta
 from runagent_pulse.tool_registry import create_registry
@@ -81,6 +81,14 @@ def build_lifespan(settings: Settings):
         await expiration_worker.start()
         await webhook_worker.start()
 
+        # Start HTTP executor worker (always available for standalone HTTP scheduling)
+        http_executor_worker = HTTPExecutorWorker(
+            db=db,
+            scheduler=scheduler,
+            interval_seconds=10,
+        )
+        await http_executor_worker.start()
+
         # Initialize executor factory and start agent executor worker
         agent_executor_worker = None
         executor_factory = ExecutorFactory(settings)
@@ -114,6 +122,7 @@ def build_lifespan(settings: Settings):
         finally:
             await expiration_worker.stop()
             await webhook_worker.stop()
+            await http_executor_worker.stop()
             if agent_executor_worker:
                 await agent_executor_worker.stop()
             await db.close()

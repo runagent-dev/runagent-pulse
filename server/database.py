@@ -362,7 +362,8 @@ class Database:
     async def get_due_webhook_tasks(self, current_time: int, limit: int = 50) -> List[Dict[str, Any]]:
         """
         Get due webhook tasks (status=active, is_webhook=true, next_execution <= current_time)
-        Excludes agent execution tasks (run_agent, execute_agent) - those are handled by AgentExecutorWorker
+        Excludes agent execution tasks (run_agent, execute_agent) and HTTP request tasks (http_request) - 
+        those are handled by AgentExecutorWorker and HTTPExecutorWorker respectively
         """
         async with self.conn.execute("""
             SELECT *
@@ -371,7 +372,7 @@ class Database:
               AND next_execution IS NOT NULL
               AND next_execution <= ?
               AND COALESCE(json_extract(metadata, '$.is_webhook'), 0) = 1
-              AND schedule_type NOT IN ('run_agent', 'execute_agent')
+              AND schedule_type NOT IN ('run_agent', 'execute_agent', 'http_request')
             ORDER BY next_execution ASC
             LIMIT ?
         """, (current_time, limit)) as cursor:

@@ -1,6 +1,6 @@
 """
-Agent Executor Worker
-Background worker that executes agents using modular executors
+HTTP Executor Worker
+Background worker that executes HTTP requests to user-provided endpoints
 """
 import asyncio
 import logging
@@ -12,35 +12,31 @@ import httpx
 
 from server.scheduler import Scheduler
 from server.database import Database
-from server.executors.factory import ExecutorFactory
-from server.executors.base import BaseExecutor
 
-logger = logging.getLogger("runagent_pulse.agent_executor_worker")
+logger = logging.getLogger("runagent_pulse.http_executor_worker")
 
 
-class AgentExecutorWorker:
-    """Background worker that polls for and executes agent tasks"""
+class HTTPExecutorWorker:
+    """Background worker that polls for and executes HTTP request tasks"""
 
     def __init__(
         self,
         db: Database,
         scheduler: Scheduler,
-        executor_factory: ExecutorFactory,
         interval_seconds: int = 10,
     ):
         self.db = db
         self.scheduler = scheduler
-        self.executor_factory = executor_factory
         self.interval_seconds = interval_seconds
         self._task: Optional[asyncio.Task] = None
-        self.worker_id = f"agent-executor-{uuid.uuid4().hex[:8]}"
+        self.worker_id = f"http-executor-{uuid.uuid4().hex[:8]}"
 
     async def start(self):
         """Start the worker"""
         if self._task:
             return
         self._task = asyncio.create_task(self._run())
-        logger.info(f"AgentExecutorWorker started (worker_id={self.worker_id})")
+        logger.info(f"HTTPExecutorWorker started (worker_id={self.worker_id})")
 
     async def stop(self):
         """Stop the worker"""
@@ -52,18 +48,18 @@ class AgentExecutorWorker:
         except asyncio.CancelledError:
             pass
         self._task = None
-        logger.info("AgentExecutorWorker stopped")
+        logger.info("HTTPExecutorWorker stopped")
 
     async def _run(self):
         """Main worker loop"""
         while True:
             try:
                 current_time = int(time.time())
-                # Poll for tasks with schedule_type="run_agent" or "execute_agent"
+                # Poll for tasks with schedule_type="http_request"
                 tasks = await self.db.get_due_tasks_from_buckets(
                     start_time=current_time - 60,  # Look back 60 seconds for missed tasks
                     end_time=current_time + 60,  # Look ahead 60 seconds
-                    schedule_types=["run_agent", "execute_agent"],
+                    schedule_types=["http_request"],
                 )
 
                 for task in tasks:
@@ -80,7 +76,7 @@ class AgentExecutorWorker:
                     await self._execute_task(task_id, execution_id, payload, metadata)
 
             except Exception as exc:
-                logger.error(f"Error in agent executor worker: {exc}", exc_info=True)
+                logger.error(f"Error in HTTP executor worker: {exc}", exc_info=True)
 
             await asyncio.sleep(self.interval_seconds)
 
@@ -91,55 +87,79 @@ class AgentExecutorWorker:
         payload: dict,
         metadata: dict,
     ):
-        """Execute a single task using the appropriate executor"""
+        """Execute a single HTTP request task"""
         start_time = time.time()
         result_status = "success"
         error_message = None
         result_data = None
 
         try:
-            # Extract agent execution parameters
-            agent_id = payload.get("agent_id")
-            entrypoint_tag = payload.get("entrypoint_tag")
-            params = payload.get("params", {})
-            user_id = payload.get("user_id")
-            persistent_memory = payload.get("persistent_memory", False)
-            executor_type = payload.get("executor_type") or metadata.get("executor_type")
-            # Get local parameter from payload or metadata (defaults to None)
-            local = payload.get("local")
-            if local is None:
-                local = metadata.get("local")
+            # Extract HTTP request parameters
+            url = payload.get("url")
+            method = payload.get("method", "POST").upper()
+            body = payload.get("body")
+            headers = payload.get("headers", {})
+            timeout = payload.get("timeout", 30)
 
-            if not agent_id or not entrypoint_tag:
-                raise ValueError("agent_id and entrypoint_tag are required")
-
-            # Get executor
-            try:
-                executor = self.executor_factory.get_executor(executor_type)
-            except ValueError as e:
-                raise ValueError(f"Failed to get executor: {e}")
+            if not url:
+                raise ValueError("url is required in payload")
 
             logger.info(
-                f"Executing agent: agent_id={agent_id}, entrypoint_tag={entrypoint_tag}, "
-                f"executor={executor.name}, local={local}, execution_id={execution_id}"
+                f"Executing HTTP request: method={method}, url={url}, "
+                f"execution_id={execution_id}"
             )
 
-            # Execute agent
-            result_data = await executor.execute(
-                agent_id=agent_id,
-                entrypoint_tag=entrypoint_tag,
-                params=params,
-                user_id=user_id,
-                persistent_memory=persistent_memory,
-                local=local,
-            )
+            # Make HTTP request
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                # Prepare request kwargs
+                request_kwargs = {
+                    "headers": headers,
+                }
+                
+                # Add body for methods that support it
+                if method in ("POST", "PUT", "PATCH", "DELETE"):
+                    if body is not None:
+                        request_kwargs["json"] = body
+                elif method == "GET" and body:
+                    # For GET requests, body is used as query params
+                    request_kwargs["params"] = body
 
-            logger.info(f"Agent execution completed: execution_id={execution_id}")
+                # Make the request
+                response = await client.request(method, url, **request_kwargs)
 
-        except asyncio.TimeoutError:
+                # Prepare result data
+                result_data = {
+                    "status_code": response.status_code,
+                    "headers": dict(response.headers),
+                    "body": response.text,
+                }
+
+                # Try to parse JSON response
+                try:
+                    result_data["json"] = response.json()
+                except:
+                    pass  # Not JSON, that's fine
+
+                # Consider 2xx and 3xx as success
+                if 200 <= response.status_code < 400:
+                    result_status = "success"
+                else:
+                    result_status = "failed"
+                    error_message = f"HTTP {response.status_code}: {response.text[:500]}"
+
+                logger.info(
+                    f"HTTP request completed: execution_id={execution_id}, "
+                    f"status_code={response.status_code}"
+                )
+
+        except httpx.TimeoutException:
             result_status = "failed"
-            error_message = "Execution timeout (exceeded 10 minutes)"
+            error_message = f"Request timeout (exceeded {timeout}s)"
             logger.error(f"Task {task_id} timed out: {error_message}")
+        except httpx.RequestError as e:
+            result_status = "failed"
+            error_message = f"Request error: {str(e)}"
+            logger.error(f"Task {task_id} request error: {error_message}")
         except Exception as exc:
             result_status = "failed"
             error_message = str(exc)

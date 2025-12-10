@@ -304,32 +304,45 @@ class Scheduler:
             if DEBUG:
                 logger.debug(f"Updating task {task_id} with next_execution={next_execution}")
             
-            # Update task with next execution
-            await self.db.update_task(task_id, {
-                "next_execution": next_execution,
-                "last_execution": executed_at
-            })
-            
             # Update execution count if recurring
+            should_complete = False
             if "repeat" in schedule_config:
                 repeat = schedule_config["repeat"]
                 if DEBUG:
                     logger.debug(f"Updating execution count for recurring task {task_id}. Repeat config: {repeat}")
-                # Always increment execution_count for recurring tasks
-                execution_count = repeat.get("execution_count", 0) + 1
+                # Get current execution count (before this execution)
+                current_count = repeat.get("execution_count", 0)
+                # Increment for this execution
+                execution_count = current_count + 1
                 repeat["execution_count"] = execution_count
-
-                await self.db.update_task(task_id, {
-                    "schedule_config": schedule_config
-                })
 
                 # Check if max executions reached
                 times = repeat.get("times")
+                if DEBUG:
+                    logger.debug(f"Execution count: {execution_count}, times limit: {times}")
                 if times is not None and execution_count >= times:
                     if DEBUG:
-                        logger.debug(f"Task {task_id} reached max executions ({times}), marking as completed")
-                    await self.db.update_task(task_id, {"status": "completed"})
-                    return None  # No more executions
+                        logger.debug(f"Task {task_id} reached max executions ({execution_count}/{times}), marking as completed")
+                    should_complete = True
+                else:
+                    # Update schedule_config with new execution_count
+                    await self.db.update_task(task_id, {
+                        "schedule_config": schedule_config
+                    })
+            
+            if should_complete:
+                # Mark as completed and don't schedule next execution
+                await self.db.update_task(task_id, {
+                    "status": "completed",
+                    "next_execution": None
+                })
+                return None  # No more executions
+            
+            # Update task with next execution and ensure status is active
+            await self.db.update_task(task_id, {
+                "next_execution": next_execution,
+                "status": "active"  # Ensure status is active for next execution
+            })
             
             # Add to new time bucket
             if DEBUG:
