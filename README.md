@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![RunAgent Pulse Logo](icon%20/logo.png)
+![RunAgent Pulse Logo](icon%20/icon.png)
 
 **Google Calendar for Your AI Agents**
 
