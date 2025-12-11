@@ -27,6 +27,7 @@ env/
 ENV/
 
 pulse-data/
+webhook-results/
 
 # IDE
 .vscode/

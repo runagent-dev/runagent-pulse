@@ -12,12 +12,13 @@ from fastapi.staticfiles import StaticFiles
 
 from server.settings import Settings, get_settings
 from server.database import Database
-from server.time_parser import TimeParser
+from runagent_pulse.time import TimeParser
 from server.scheduler import Scheduler
 from server.webhook_executor import WebhookExecutor
 from server.services import TaskService
-from server.mcp_tools import create_mcp_server
-from server.workers import ExpirationWorker, WebhookWorker
+from server.mcp import create_mcp_server
+from server.workers import ExpirationWorker, WebhookWorker, AgentExecutorWorker, HTTPExecutorWorker
+from server.executors.factory import ExecutorFactory
 from server.api import tasks, health, metrics, dashboard, tools, meta
 from runagent_pulse.tool_registry import create_registry
 
@@ -80,6 +81,31 @@ def build_lifespan(settings: Settings):
         await expiration_worker.start()
         await webhook_worker.start()
 
+        # Start HTTP executor worker (always available for standalone HTTP scheduling)
+        http_executor_worker = HTTPExecutorWorker(
+            db=db,
+            scheduler=scheduler,
+            interval_seconds=10,
+        )
+        await http_executor_worker.start()
+
+        # Initialize executor factory and start agent executor worker
+        agent_executor_worker = None
+        executor_factory = ExecutorFactory(settings)
+        available_executors = executor_factory.list_available()
+        
+        if available_executors:
+            logger.info(f"Available executors: {', '.join(available_executors)}")
+            agent_executor_worker = AgentExecutorWorker(
+                db=db,
+                scheduler=scheduler,
+                executor_factory=executor_factory,
+                interval_seconds=10,
+            )
+            await agent_executor_worker.start()
+        else:
+            logger.warning("No executors available. Agent execution will not work.")
+
         # Mount MCP server now that services are initialized
         mcp_server = create_mcp_server(
             db=db,
@@ -96,6 +122,9 @@ def build_lifespan(settings: Settings):
         finally:
             await expiration_worker.stop()
             await webhook_worker.stop()
+            await http_executor_worker.stop()
+            if agent_executor_worker:
+                await agent_executor_worker.stop()
             await db.close()
 
     return lifespan

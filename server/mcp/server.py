@@ -1,8 +1,7 @@
 """MCP server auto-generated from tool catalog and registry."""
 from fastmcp import FastMCP
 from runagent_pulse.tool_registry import ToolRegistry, create_registry
-from server.tool_catalog import list_tools_for
-from server.tool_context import build_tool_context
+from server.tools import list_tools_for, build_tool_context
 import json
 import inspect
 
@@ -92,3 +91,4 @@ def create_mcp_server(db, scheduler, task_service, registry: ToolRegistry | None
     # Build ASGI app for mounting; use path="/" so mounting prefix controls URL
     mcp_app = mcp.http_app(path="/")
     return mcp_app
+

@@ -1,9 +1,13 @@
+version: '3.8'
+
 services:
   pulse:
     build: .
     container_name: runagent-pulse
     ports:
       - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./pulse-data:/app/data
     environment:
@@ -11,6 +15,30 @@ services:
       - PULSE_TIMEZONE=UTC
       - PULSE_DEBUG=${PULSE_DEBUG:-true}
       - PULSE_DB_PATH=/app/data/pulse.db
+      - ENABLE_SERVERLESS_INTEGRATION=${ENABLE_SERVERLESS_INTEGRATION:-true}
+      - RUNAGENT_SERVERLESS_API_KEY=${RUNAGENT_SERVERLESS_API_KEY:-}
+      - RUNAGENT_API_KEY=${RUNAGENT_SERVERLESS_API_KEY:-}
+      - RUNAGENT_BASE_URL=${RUNAGENT_BASE_URL:-https://backend.run-agent.ai/}
+      - GIT_PYTHON_REFRESH=quiet
+    networks:
+      - runagent-network
     restart: unless-stopped
 
+  webhook-handler:
+    build: ./webhook-handler
+    container_name: runagent-webhook-handler
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./webhook-results:/app/results
+    environment:
+      - RESULTS_DIR=/app/results
+    networks:
+      - runagent-network
+    restart: unless-stopped
+    depends_on:
+      - pulse
 
+networks:
+  runagent-network:
+    driver: bridge

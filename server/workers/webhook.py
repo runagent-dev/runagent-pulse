@@ -1,58 +1,17 @@
-"""Background workers for expiration checks and webhook execution."""
-from typing import Optional, Callable
+"""Webhook worker - process due webhook tasks with retries."""
 import asyncio
 import time
 import logging
 
+from server.workers.base import BaseWorker
 from server.scheduler import Scheduler
 from server.database import Database
 from server.webhook_executor import WebhookExecutor
 
-logger = logging.getLogger("runagent_pulse.workers")
+logger = logging.getLogger("runagent_pulse.workers.webhook")
 
 
-class _BaseWorker:
-    def __init__(self):
-        self._task: Optional[asyncio.Task] = None
-
-    async def start(self, factory: Callable[[], asyncio.Task]):
-        if self._task:
-            return
-        self._task = factory()
-
-    async def stop(self):
-        if not self._task:
-            return
-        self._task.cancel()
-        try:
-            await self._task
-        except asyncio.CancelledError:
-            pass
-        self._task = None
-
-
-class ExpirationWorker(_BaseWorker):
-    """Periodically expire unclaimed tasks."""
-
-    def __init__(self, scheduler: Scheduler, interval_seconds: int = 30, max_age_seconds: int = 60):
-        super().__init__()
-        self.scheduler = scheduler
-        self.interval_seconds = interval_seconds
-        self.max_age_seconds = max_age_seconds
-
-    async def start(self):
-        await super().start(lambda: asyncio.create_task(self._run()))
-
-    async def _run(self):
-        while True:
-            try:
-                await self.scheduler.expire_unclaimed_tasks(max_age_seconds=self.max_age_seconds)
-            except Exception as exc:  # pragma: no cover - log and continue
-                logger.error("Error in expiration worker: %s", exc)
-            await asyncio.sleep(self.interval_seconds)
-
-
-class WebhookWorker(_BaseWorker):
+class WebhookWorker(BaseWorker):
     """Process due webhook tasks with retries."""
 
     def __init__(
@@ -157,5 +116,4 @@ class WebhookWorker(_BaseWorker):
                 logger.error("Error in webhook worker: %s", exc)
 
             await asyncio.sleep(self.interval_seconds)
-
 

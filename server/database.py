@@ -72,6 +72,19 @@ class Database:
             )
         """)
         
+        # Execution results table (for storing agent execution results)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS execution_results (
+                execution_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                result_data TEXT,
+                result_status TEXT NOT NULL,
+                stored_at INTEGER NOT NULL,
+                expires_at INTEGER,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+        """)
+        
         # Create indexes
         await self.conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)
@@ -90,6 +103,12 @@ class Database:
         """)
         await self.conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_history_executed_at ON execution_history(executed_at)
+        """)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_results_task_id ON execution_results(task_id)
+        """)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_results_stored_at ON execution_results(stored_at)
         """)
         
     async def create_task(self, task_id: str, schedule_type: str, created_at: int,
@@ -315,12 +334,14 @@ class Database:
         placeholders = ",".join("?" * len(task_ids))
         type_placeholders = ",".join("?" * len(schedule_types))
         
+        # For agent execution tasks, include them even if is_webhook is set
+        # (they may have callbacks but still need to be executed)
+        # The is_webhook filter only applies to exclude regular webhook tasks, not agent executions
         query = f"""
             SELECT * FROM tasks
             WHERE id IN ({placeholders})
               AND schedule_type IN ({type_placeholders})
               AND status = 'active'
-              AND COALESCE(json_extract(metadata, '$.is_webhook'), 0) = 0
         """
         
         async with self.conn.execute(query, list(task_ids) + schedule_types) as cursor:
@@ -341,6 +362,8 @@ class Database:
     async def get_due_webhook_tasks(self, current_time: int, limit: int = 50) -> List[Dict[str, Any]]:
         """
         Get due webhook tasks (status=active, is_webhook=true, next_execution <= current_time)
+        Excludes agent execution tasks (run_agent, execute_agent) and HTTP request tasks (http_request) - 
+        those are handled by AgentExecutorWorker and HTTPExecutorWorker respectively
         """
         async with self.conn.execute("""
             SELECT *
@@ -349,6 +372,7 @@ class Database:
               AND next_execution IS NOT NULL
               AND next_execution <= ?
               AND COALESCE(json_extract(metadata, '$.is_webhook'), 0) = 1
+              AND schedule_type NOT IN ('run_agent', 'execute_agent', 'http_request')
             ORDER BY next_execution ASC
             LIMIT ?
         """, (current_time, limit)) as cursor:
@@ -389,11 +413,12 @@ class Database:
         history = []
         for row in rows:
             history.append({
-                "execution_id": row.get("execution_id"),
+                # sqlite3.Row supports dict-style access but not .get()
+                "execution_id": row["execution_id"],
                 "executed_at": row["executed_at"],
                 "executed_at_iso": datetime.utcfromtimestamp(row["executed_at"]).isoformat() + "Z",
-                "expired_at": row.get("expired_at"),
-                "expired_at_iso": datetime.utcfromtimestamp(row["expired_at"]).isoformat() + "Z" if row.get("expired_at") else None,
+                "expired_at": row["expired_at"],
+                "expired_at_iso": datetime.utcfromtimestamp(row["expired_at"]).isoformat() + "Z" if row["expired_at"] else None,
                 "status": row["status"],
                 "execution_time_ms": row["execution_time_ms"],
                 "error": row["error"]
@@ -580,6 +605,90 @@ class Database:
         async with self.conn.execute(query, schedule_types + [current_time]) as cursor:
             row = await cursor.fetchone()
             return row["next_time"] if row and row["next_time"] else None
+    
+    async def store_execution_result(
+        self,
+        execution_id: str,
+        task_id: str,
+        result: Any,
+        status: str,
+        expires_at: Optional[int] = None,
+    ):
+        """
+        Store execution result
+        
+        Args:
+            execution_id: Unique execution ID
+            task_id: Task ID
+            result: Result data (will be JSON serialized)
+            status: Result status (e.g., "success", "failed")
+            expires_at: Optional expiration timestamp
+        """
+        stored_at = int(time.time())
+        result_data_json = json.dumps(result) if result is not None else None
+        
+        await self.conn.execute("""
+            INSERT OR REPLACE INTO execution_results 
+            (execution_id, task_id, result_data, result_status, stored_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (execution_id, task_id, result_data_json, status, stored_at, expires_at))
+        await self.conn.commit()
+    
+    async def get_execution_result(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent execution result for a task
+        
+        Args:
+            task_id: Task ID
+            
+        Returns:
+            Result dict or None if not found
+        """
+        async with self.conn.execute("""
+            SELECT * FROM execution_results
+            WHERE task_id = ?
+            ORDER BY stored_at DESC
+            LIMIT 1
+        """, (task_id,)) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            
+            return {
+                "execution_id": row["execution_id"],
+                "task_id": row["task_id"],
+                "result": json.loads(row["result_data"]) if row["result_data"] else None,
+                "status": row["result_status"],
+                "stored_at": row["stored_at"],
+                "expires_at": row.get("expires_at"),
+            }
+    
+    async def get_execution_result_by_execution_id(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get execution result by execution ID
+        
+        Args:
+            execution_id: Execution ID
+            
+        Returns:
+            Result dict or None if not found
+        """
+        async with self.conn.execute("""
+            SELECT * FROM execution_results
+            WHERE execution_id = ?
+        """, (execution_id,)) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            
+            return {
+                "execution_id": row["execution_id"],
+                "task_id": row["task_id"],
+                "result": json.loads(row["result_data"]) if row["result_data"] else None,
+                "status": row["result_status"],
+                "stored_at": row["stored_at"],
+                "expires_at": row.get("expires_at"),
+            }
     
     async def close(self):
         """Close database connection"""

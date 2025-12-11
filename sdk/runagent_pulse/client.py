@@ -286,6 +286,195 @@ class PulseClient:
         response.raise_for_status()
         data = response.json()
         return data.get("history", [])
+    
+    def schedule_agent(
+        self,
+        agent_id: str,
+        entrypoint_tag: str,
+        when: Any,
+        params: Dict[str, Any],
+        callback_url: Optional[str] = None,
+        user_id: Optional[str] = None,
+        persistent_memory: bool = False,
+        executor_type: Optional[str] = None,
+        local: Optional[bool] = None,
+        repeat: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        agent_host: Optional[str] = None,
+        agent_port: Optional[int] = None,
+    ) -> PulseTask:
+        """
+        Schedule agent execution
+        
+        Args:
+            agent_id: Agent ID (for serverless) or module name (for local)
+            entrypoint_tag: Agent entrypoint to execute
+            when: When to execute ("in 5 minutes", "tomorrow at 9am", "now", cron)
+            params: Parameters to pass to agent (dict that matches agent function args)
+            callback_url: Optional webhook URL to POST result to
+            user_id: Optional user ID for persistent memory
+            persistent_memory: Enable persistent memory for agent
+            executor_type: Executor type ("serverless", "local", or None for auto)
+            local: If True, use RunAgent local execution (RunAgentClient with local=True).
+                   If False, use RunAgent serverless (RunAgentClient with local=False).
+                   If None, use executor_type to determine behavior.
+            repeat: Optional repeat configuration for recurring execution.
+                   Format: {"interval": "30s", "times": None} for infinite,
+                   or {"interval": "30s", "times": 5} for limited repetitions.
+                   Examples: "30s", "1m", "5m", "1h", "1d"
+            metadata: Optional metadata
+            
+        Returns:
+            PulseTask instance
+            
+        Example:
+            # Schedule agent to run every 30 seconds
+            task = pulse.schedule_agent(
+                agent_id="your-agent-id",
+                entrypoint_tag="your-entrypoint",
+                when="now",
+                params={"prompt": "Hello"},
+                repeat={"interval": "30s", "times": None}  # Infinite
+            )
+        """
+        payload = {
+            "agent_id": agent_id,
+            "entrypoint_tag": entrypoint_tag,
+            "params": params,
+            "user_id": user_id,
+            "persistent_memory": persistent_memory,
+        }
+
+        if agent_host:
+            payload["agent_host"] = agent_host
+        if agent_port:
+            payload["agent_port"] = agent_port
+        
+        # Add executor_type to payload if specified
+        if executor_type:
+            payload["executor_type"] = executor_type
+        
+        # Add local parameter to payload if specified
+        if local is not None:
+            payload["local"] = local
+        
+        # Merge metadata if provided
+        if metadata:
+            payload_metadata = metadata.copy()
+        else:
+            payload_metadata = {}
+        
+        # Store executor_type in metadata as well for backward compatibility
+        if executor_type:
+            payload_metadata["executor_type"] = executor_type
+        
+        # Store local parameter in metadata for the worker to use
+        if local is not None:
+            payload_metadata["local"] = local
+        
+        # Store callback_url in metadata for the worker to use
+        if callback_url:
+            payload_metadata["callback_url"] = callback_url
+
+        if agent_host:
+            payload_metadata["agent_host"] = agent_host
+        if agent_port:
+            payload_metadata["agent_port"] = agent_port
+        
+        return self.schedule(
+            schedule_type="run_agent",
+            when=when,
+            payload=payload,
+            repeat=repeat,
+            metadata=payload_metadata,
+            webhook_url=callback_url,  # Also set webhook_url for webhook worker compatibility
+        )
+    
+    def get_task_result(self, task_id: str) -> Dict[str, Any]:
+        """
+        Get result for a task
+        
+        Args:
+            task_id: Task ID
+            
+        Returns:
+            Dict with status and result:
+            - {"status": "pending"} if not yet executed
+            - {"status": "completed", "result": {...}} when done
+            - {"status": "failed", "error": "..."} if failed
+        """
+        response = requests.get(
+            f"{self.server_url}/tasks/{task_id}/result",
+            headers=self.headers
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    def schedule_http(
+        self,
+        url: str,
+        method: str = "POST",
+        when: Any = "now",
+        body: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[int] = None,
+        callback_url: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> PulseTask:
+        """
+        Schedule an HTTP request to be executed at a specific time
+        
+        Args:
+            url: Target URL to hit
+            method: HTTP method (GET, POST, PUT, DELETE, etc.) - defaults to POST
+            when: When to execute ("in 5 minutes", "tomorrow at 9am", "now", cron, etc.)
+            body: Request body (dict will be JSON-encoded)
+            headers: Optional HTTP headers to include in the request
+            timeout: Optional timeout in seconds (default: 30)
+            callback_url: Optional webhook URL to POST result to
+            metadata: Optional metadata
+            
+        Returns:
+            PulseTask instance
+            
+        Example:
+            # Schedule morning routine
+            task = pulse.schedule_http(
+                url="http://localhost:5000/agents/morning-routine",
+                method="POST",
+                when="daily at 9am",
+                body={"user": "sawradip"},
+                headers={"Authorization": "Bearer my-secret-token"}
+            )
+        """
+        payload = {
+            "url": url,
+            "method": method.upper(),
+        }
+        
+        if body is not None:
+            payload["body"] = body
+        
+        if headers:
+            payload["headers"] = headers
+        
+        if timeout:
+            payload["timeout"] = timeout
+        
+        # Merge metadata
+        payload_metadata = metadata.copy() if metadata else {}
+        
+        # Store callback_url in metadata for the worker to use
+        if callback_url:
+            payload_metadata["callback_url"] = callback_url
+        
+        return self.schedule(
+            schedule_type="http_request",
+            when=when,
+            payload=payload,
+            metadata=payload_metadata,
+            webhook_url=callback_url,  # Also set webhook_url for webhook worker compatibility
+        )
 
     def call_tool(self, name: str, **kwargs) -> Dict[str, Any]:
         """

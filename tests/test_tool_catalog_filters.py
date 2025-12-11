@@ -1,4 +1,4 @@
-from server.tool_catalog import list_tools_for, list_tools
+from server.tools import list_tools_for, list_tools
 
 
 def test_list_tools_http_contains_schedule():
