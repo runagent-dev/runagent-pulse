@@ -300,6 +300,8 @@ class PulseClient:
         local: Optional[bool] = None,
         repeat: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        agent_host: Optional[str] = None,
+        agent_port: Optional[int] = None,
     ) -> PulseTask:
         """
         Schedule agent execution
@@ -342,6 +344,11 @@ class PulseClient:
             "user_id": user_id,
             "persistent_memory": persistent_memory,
         }
+
+        if agent_host:
+            payload["agent_host"] = agent_host
+        if agent_port:
+            payload["agent_port"] = agent_port
         
         # Add executor_type to payload if specified
         if executor_type:
@@ -368,6 +375,11 @@ class PulseClient:
         # Store callback_url in metadata for the worker to use
         if callback_url:
             payload_metadata["callback_url"] = callback_url
+
+        if agent_host:
+            payload_metadata["agent_host"] = agent_host
+        if agent_port:
+            payload_metadata["agent_port"] = agent_port
         
         return self.schedule(
             schedule_type="run_agent",

@@ -110,6 +110,9 @@ class AgentExecutorWorker:
             if local is None:
                 local = metadata.get("local")
 
+            agent_host = payload.get("agent_host") or metadata.get("agent_host")
+            agent_port = payload.get("agent_port") or metadata.get("agent_port")
+
             if not agent_id or not entrypoint_tag:
                 raise ValueError("agent_id and entrypoint_tag are required")
 
@@ -132,6 +135,8 @@ class AgentExecutorWorker:
                 user_id=user_id,
                 persistent_memory=persistent_memory,
                 local=local,
+                agent_host=agent_host,
+                agent_port=agent_port,
             )
 
             logger.info(f"Agent execution completed: execution_id={execution_id}")

@@ -1,12 +1,9 @@
 """
 Local Executor
-Executes agents locally (not via RunAgent Serverless)
+Executes agents locally (via RunAgent local client)
 """
 import asyncio
 import logging
-import importlib
-import sys
-from pathlib import Path
 from typing import Dict, Any, Optional
 
 from server.executors.base import BaseExecutor
@@ -20,47 +17,10 @@ class LocalExecutor(BaseExecutor):
     def __init__(self, agent_path: Optional[str] = None):
         super().__init__("local")
         self.agent_path = agent_path
-        self._agent_modules = {}
     
     def is_available(self) -> bool:
         """Check if local execution is configured"""
         return True  # Always available, but may fail if agent not found
-    
-    def _load_agent_module(self, agent_id: str, entrypoint_tag: str):
-        """
-        Load agent module dynamically
-        
-        Args:
-            agent_id: Agent ID (used as module identifier)
-            entrypoint_tag: Entrypoint tag (function name)
-        """
-        cache_key = f"{agent_id}:{entrypoint_tag}"
-        
-        if cache_key in self._agent_modules:
-            return self._agent_modules[cache_key]
-        
-        # Try to load from agent_path if provided
-        if self.agent_path:
-            agent_dir = Path(self.agent_path) / agent_id
-            if agent_dir.exists():
-                sys.path.insert(0, str(agent_dir.parent))
-                try:
-                    module = importlib.import_module(agent_id)
-                    self._agent_modules[cache_key] = module
-                    return module
-                except ImportError as e:
-                    self.logger.warning(f"Failed to import agent module {agent_id}: {e}")
-        
-        # Try to import as a regular module
-        try:
-            module = importlib.import_module(agent_id)
-            self._agent_modules[cache_key] = module
-            return module
-        except ImportError:
-            raise ImportError(
-                f"Could not import agent module '{agent_id}'. "
-                f"Make sure the agent is installed or set LOCAL_AGENT_PATH."
-            )
     
     async def execute(
         self,
@@ -72,7 +32,7 @@ class LocalExecutor(BaseExecutor):
         **kwargs
     ) -> Any:
         """
-        Execute agent locally
+        Execute agent via RunAgent local client (no module import needed)
         
         Args:
             agent_id: Agent ID (module name or path)
@@ -84,37 +44,44 @@ class LocalExecutor(BaseExecutor):
         Returns:
             Execution result
         """
+        try:
+            from runagent import RunAgentClient
+        except ImportError:
+            raise ImportError(
+                "runagent package not installed. Install with: pip install runagent"
+            )
+        
         self.logger.info(
-            f"Executing agent locally: agent_id={agent_id}, "
+            f"Executing agent via RunAgent Local client: agent_id={agent_id}, "
             f"entrypoint_tag={entrypoint_tag}"
         )
-        
-        # Load agent module
-        module = self._load_agent_module(agent_id, entrypoint_tag)
-        
-        # Get entrypoint function
-        if not hasattr(module, entrypoint_tag):
-            raise AttributeError(
-                f"Entrypoint '{entrypoint_tag}' not found in agent module '{agent_id}'"
-            )
-        
-        entrypoint_func = getattr(module, entrypoint_tag)
-        
-        # Execute in thread pool (in case it's blocking)
-        if asyncio.iscoroutinefunction(entrypoint_func):
-            result = await asyncio.wait_for(
-                entrypoint_func(**params),
-                timeout=600.0,
-            )
+
+        agent_host = kwargs.get("agent_host") or kwargs.get("host")
+        agent_port = kwargs.get("agent_port") or kwargs.get("port")
+
+        if agent_host and agent_port:
+            self.logger.info(f"Using explicit local agent address {agent_host}:{agent_port}")
         else:
-            def run_local_agent():
-                return entrypoint_func(**params)
-            
-            result = await asyncio.wait_for(
-                asyncio.to_thread(run_local_agent),
-                timeout=600.0,
-            )
-        
+            self.logger.info("Using agent address from local RunAgent DB")
+
+        client = RunAgentClient(
+            agent_id=agent_id,
+            entrypoint_tag=entrypoint_tag,
+            local=True,
+            host=agent_host,
+            port=agent_port,
+            user_id=user_id,
+            persistent_memory=persistent_memory,
+        )
+
+        def run_agent():
+            return client.run(**params)
+
+        result = await asyncio.wait_for(
+            asyncio.to_thread(run_agent),
+            timeout=600.0,
+        )
+
         self.logger.info(f"Local agent execution completed: agent_id={agent_id}")
         return result
 

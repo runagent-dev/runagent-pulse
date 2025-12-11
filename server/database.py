@@ -413,11 +413,12 @@ class Database:
         history = []
         for row in rows:
             history.append({
-                "execution_id": row.get("execution_id"),
+                # sqlite3.Row supports dict-style access but not .get()
+                "execution_id": row["execution_id"],
                 "executed_at": row["executed_at"],
                 "executed_at_iso": datetime.utcfromtimestamp(row["executed_at"]).isoformat() + "Z",
-                "expired_at": row.get("expired_at"),
-                "expired_at_iso": datetime.utcfromtimestamp(row["expired_at"]).isoformat() + "Z" if row.get("expired_at") else None,
+                "expired_at": row["expired_at"],
+                "expired_at_iso": datetime.utcfromtimestamp(row["expired_at"]).isoformat() + "Z" if row["expired_at"] else None,
                 "status": row["status"],
                 "execution_time_ms": row["execution_time_ms"],
                 "error": row["error"]

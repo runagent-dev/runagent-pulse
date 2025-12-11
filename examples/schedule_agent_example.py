@@ -49,9 +49,8 @@ recurring_task = pulse.schedule_agent(
     params={
         "prompt": "what is AI in one line?"
     },
-    executor_type="serverless",
-    local=False,  # Use RunAgent Serverless
-    repeat={"interval": "10m", "times": 3},  # Every 30 seconds, infinite
+    executor_type="local",
+    repeat={"interval": "2m", "times": 2},  # Every 30 seconds, infinite
     callback_url="http://webhook-handler:3001/results"
 )
 
