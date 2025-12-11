@@ -24,6 +24,7 @@ RunAgent Pulse is a powerful scheduling system that brings enterprise-grade task
 - **Natural Language Scheduling**: Schedule tasks using natural language like "tomorrow at 2pm" or "every 30 seconds"
 - **RunAgent Serverless Integration**: Seamlessly schedule and execute agents deployed on RunAgent Serverless
 - **Local Agent Support**: Execute agents running locally via `runagent serve`
+- **Bring-Your-Own Endpoint**: Trigger any HTTP endpoint you expose; Pulse will schedule and call it for you (see `examples/schedule_http_example.py`)
 - **MCP Server Integration**: Full Model Context Protocol support for AI agent frameworks
 - **Modular Tools System**: Framework-specific tools for CrewAI, LangGraph, and MCP
 - **Callback & Polling Modes**: Receive results via webhooks or poll for completion
@@ -89,6 +90,8 @@ pip install runagent-pulse
 ## RunAgent Serverless Integration
 
 RunAgent Pulse makes scheduling agents on RunAgent Serverless incredibly simple. With just a few lines of code, you can schedule agent executions, set up recurring tasks, and receive results automatically.
+
+> RunAgent Serverless docs and examples: https://github.com/runagent-dev/runagent
 
 ### Basic Serverless Scheduling
 
