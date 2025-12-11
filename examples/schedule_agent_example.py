@@ -47,7 +47,7 @@ recurring_task = pulse.schedule_agent(
     entrypoint_tag="agno_print_response",
     when="in 1 minute",  # Start immediately
     params={
-        "prompt": "what is AI in one line?"
+        "prompt": "what is GPU in one line?"
     },
     executor_type="serverless",
     local=False,

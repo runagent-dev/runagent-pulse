@@ -51,18 +51,29 @@ class LocalExecutor(BaseExecutor):
                 "runagent package not installed. Install with: pip install runagent"
             )
         
-        self.logger.info(
-            f"Executing agent via RunAgent Local client: agent_id={agent_id}, "
-            f"entrypoint_tag={entrypoint_tag}"
-        )
-
         agent_host = kwargs.get("agent_host") or kwargs.get("host")
         agent_port = kwargs.get("agent_port") or kwargs.get("port")
+
+        # If running in Docker and host is an external IP, use host.docker.internal
+        import os
+        if agent_host and os.path.exists("/.dockerenv"):
+            # We're in Docker - replace external IPs with host.docker.internal
+            if agent_host not in ["localhost", "127.0.0.1", "host.docker.internal"]:
+                original_host = agent_host
+                agent_host = "host.docker.internal"
+                self.logger.info(
+                    f"Running in Docker: replacing {original_host} with {agent_host}"
+                )
 
         if agent_host and agent_port:
             self.logger.info(f"Using explicit local agent address {agent_host}:{agent_port}")
         else:
             self.logger.info("Using agent address from local RunAgent DB")
+
+        self.logger.info(
+            f"Executing agent via RunAgent Local client: agent_id={agent_id}, "
+            f"entrypoint_tag={entrypoint_tag}"
+        )
 
         client = RunAgentClient(
             agent_id=agent_id,
