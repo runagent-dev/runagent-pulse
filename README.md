@@ -24,7 +24,7 @@ RunAgent Pulse is a powerful scheduling system that brings enterprise-grade task
 
 ### Key Features
 
-- **Natural Language Scheduling**: Schedule tasks using natural language like "tomorrow at 2pm" or "every 30 seconds"
+- **Natural Language Scheduling**: Schedule tasks using natural language like "tomorrow at 2pm" or "every 30 seconds" (Upcoming more using function calling)
 - **RunAgent Serverless Integration**: Seamlessly schedule and execute agents deployed on RunAgent Serverless
 - **Local Agent Support**: Execute agents running locally via `runagent serve`
 - **Bring-Your-Own Endpoint**: Trigger any HTTP endpoint you expose; Pulse will schedule and call it for you (see `examples/schedule_http_example.py`)
