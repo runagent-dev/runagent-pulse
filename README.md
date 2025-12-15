@@ -638,7 +638,7 @@ MIT License - see LICENSE file for details.
 
 <div align="center">
 
-**Built with ❤️ for the AI agent community**
+**Built with ❤️ for the AI agent community by RunAgent**
 
 [Documentation](docs/) | [Examples](examples/) | [Issues](https://github.com/your-org/runagent-pulse/issues)
 
