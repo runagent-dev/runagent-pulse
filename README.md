@@ -3,7 +3,6 @@
 <div align="center">
 
 ![RunAgent Pulse Logo](icon%20/icon.png)
-
 **Google Calendar for Your AI Agents**
 
 A lightweight, self-hosted scheduling service designed for AI agents and developers. Schedule agent executions with second-level precision, natural language scheduling, and seamless integration with RunAgent Serverless.
