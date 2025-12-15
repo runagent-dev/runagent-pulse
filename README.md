@@ -1,10 +1,11 @@
-# RunAgent Pulse
-
 <div align="center">
 
 ![RunAgent Pulse Logo](icon%20/icon.png)
 
 **Google Calendar for Your AI Agents**
+
+
+# What is RunAgent Pulse?
 
 A lightweight, self-hosted scheduling service designed for AI agents and developers. Schedule agent executions with second-level precision, natural language scheduling, and seamless integration with RunAgent Serverless.
 
@@ -470,7 +471,8 @@ Call an MCP tool.
 
 ## Examples
 
-### Example 1: PaperFlow (arXiv paper scheduler)
+## Example 1: PaperFlow (arXiv paper scheduler)
+### You can go the main repo of Paperflow [paper-flow](https://github.com/aritra741/paper-flow)
 
 The `examples/test_paperflow.py` script shows a complete, copy‑paste workflow for scheduling a PaperFlow agent that searches arXiv for new papers on specific topics.
 
