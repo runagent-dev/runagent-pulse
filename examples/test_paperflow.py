@@ -17,7 +17,7 @@ PULSE_SERVER_URL = "http://localhost:8000"              # Your Pulse server
 AGENT_ID = "62f7a781-71bb-4d62-a68f-34dc4f2bfd0b"      # Your deployed agent ID
 
 TOPICS = [
-"fine-tuning vision language models"
+"fine-tuning multi modal models"
 ]
 
 # ============================================================================
@@ -36,7 +36,7 @@ def schedule_daily():
     task = pulse.schedule_agent(
         agent_id=AGENT_ID,
         entrypoint_tag="check_papers_async",
-        when="daily at 9am",
+        when="in 3 minute",
         params={
             "topics": TOPICS,
             "max_results": 20,
@@ -45,7 +45,11 @@ def schedule_daily():
         },
         executor_type="serverless",
         user_id="paperflow_daily",
-        persistent_memory=True
+        persistent_memory=True,
+        repeat={
+            "interval": "15m",
+            "times": 3
+        }
     )
     
     print(f"\n✅ Scheduled daily at 9:00 AM")
@@ -60,7 +64,7 @@ def schedule_daily():
 # FUNCTION 2: RECURRING SCHEDULE
 # ============================================================================
 
-def schedule_recurring(interval="10m", times=1):
+def schedule_recurring(interval="15m", times=1):
     """Run at regular intervals (e.g., every 6 hours)"""
     
     pulse = PulseClient(server_url=PULSE_SERVER_URL)
@@ -84,7 +88,7 @@ def schedule_recurring(interval="10m", times=1):
         persistent_memory=True,
         repeat={
             "interval": interval,
-            "times": times  # None = infinite
+            "times": 3  # None = infinite
         }
     )
     

@@ -3,6 +3,7 @@
 <div align="center">
 
 ![RunAgent Pulse Logo](icon%20/icon.png)
+
 **Google Calendar for Your AI Agents**
 
 A lightweight, self-hosted scheduling service designed for AI agents and developers. Schedule agent executions with second-level precision, natural language scheduling, and seamless integration with RunAgent Serverless.
@@ -469,7 +470,105 @@ Call an MCP tool.
 
 ## Examples
 
-### Example: Daily Report Agent
+### Example 1: PaperFlow (arXiv paper scheduler)
+
+The `examples/test_paperflow.py` script shows a complete, copy‑paste workflow for scheduling a PaperFlow agent that searches arXiv for new papers on specific topics.
+
+- **What it does**
+  - **Daily mode**: Run your PaperFlow agent once per day at a specific time.
+  - **Recurring mode**: Run the agent every N minutes/hours, a fixed number of times or indefinitely.
+
+- **Setup**
+  - **1. Configure Pulse + Serverless**: Start Pulse with Docker Compose (see **Quick Start**) and ensure `ENABLE_SERVERLESS_INTEGRATION=true` and `RUNAGENT_SERVERLESS_API_KEY` are set.
+  - **2. Deploy your PaperFlow agent** on RunAgent Serverless and copy its `agent_id`.
+  - **3. Edit the example**:
+    - Open `examples/test_paperflow.py`
+    - Set `AGENT_ID` to your deployed agent ID
+    - Update `TOPICS` with the topics you care about (e.g. `"fine-tuning multimodal models"`)
+
+- **Daily schedule (starting today)**
+
+```python
+from runagent_pulse import PulseClient
+
+PULSE_SERVER_URL = "http://localhost:8000"
+AGENT_ID = "<your-agent-id>"
+
+TOPICS = [
+    "fine-tuning multimodal models",
+]
+
+def schedule_daily():
+    """Run once per day at 7:45 PM"""
+    pulse = PulseClient(server_url=PULSE_SERVER_URL)
+
+    task = pulse.schedule_agent(
+        agent_id=AGENT_ID,
+        entrypoint_tag="check_papers_async",
+        # First run: natural language, parsed by Pulse
+        when="today at 7:45pm",
+        params={
+            "topics": TOPICS,
+            "max_results": 20,
+            "days_back": 7,
+            "verbose": True,
+        },
+        executor_type="serverless",
+        user_id="paperflow_daily",
+        persistent_memory=True,
+        # Make it truly daily
+        repeat={
+            "interval": "1d",   # every 1 day
+            "times": None       # infinite
+        },
+    )
+
+    print(f"Scheduled PaperFlow daily: {task.task_id}")
+```
+
+- **Recurring schedule (every N minutes/hours)**
+
+```python
+def schedule_recurring(interval="10m", times=1):
+    """Run at regular intervals (e.g., every 6 hours)"""
+    pulse = PulseClient(server_url=PULSE_SERVER_URL)
+
+    task = pulse.schedule_agent(
+        agent_id=AGENT_ID,
+        entrypoint_tag="check_papers_async",
+        when="in 3 minute",  # start soon
+        params={
+            "topics": TOPICS,
+            "max_results": 20,
+            "days_back": 100,
+            "verbose": True,
+        },
+        executor_type="serverless",
+        user_id="paperflow_recurring",
+        persistent_memory=True,
+        repeat={
+            "interval": interval,  # e.g. "10m", "2h", "1d"
+            "times": times,        # None = infinite
+        },
+    )
+
+    print(f"Scheduled PaperFlow every {interval}: {task.task_id}")
+```
+
+- **How to run it**
+
+```bash
+# Daily mode (once per day)
+python examples/test_paperflow.py daily
+
+# Recurring mode (every 6 hours, infinite)
+python examples/test_paperflow.py recurring 6h
+
+# Recurring mode (every 2 hours, 5 times)
+python examples/test_paperflow.py recurring 2h 5
+```
+
+### Example 2: Daily Report Agent
 
 ```python
 from runagent_pulse import PulseClient
@@ -494,7 +593,7 @@ task = pulse.schedule_agent(
 )
 ```
 
-### Example: Monitoring Agent
+### Example 3: Monitoring Agent
 
 ```python
 # Schedule monitoring agent every 5 minutes
